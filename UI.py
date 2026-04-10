@@ -8,8 +8,6 @@ import sys
 import queue
 import numpy as np
 import os
-os.environ.setdefault("PYVISTA_OFF_SCREEN", "false")
-os.environ.setdefault("VTK_USE_X", "1")
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
