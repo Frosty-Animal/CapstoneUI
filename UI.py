@@ -989,7 +989,8 @@ class ScanToMillUI(QMainWindow):
             self._modbus.send_command(CCMD_DISAB_MTRS)
             self._modbus.stop()
             self._modbus.wait(2000)
-        self.plotter.close()
+        if hasattr(self, "plotter"):
+            self.plotter.close()
         event.accept()
 
     def showEvent(self, event):
@@ -997,7 +998,7 @@ class ScanToMillUI(QMainWindow):
         if not hasattr(self, "_viewport_initialized"):
             self._viewport_initialized = True
             QTimer.singleShot(0, self._init_viewport_safe)
-        
+
     def _init_viewport_safe(self):
         try:
             self._init_viewport()
@@ -1006,6 +1007,8 @@ class ScanToMillUI(QMainWindow):
             self._log(f"[VIZ] _init_viewport FAILED: {e}")
             import traceback
             traceback.print_exc()
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
