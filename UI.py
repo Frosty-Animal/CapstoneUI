@@ -992,20 +992,20 @@ class ScanToMillUI(QMainWindow):
         self.plotter.close()
         event.accept()
 
-def showEvent(self, event):
-    super().showEvent(event)
-    if not hasattr(self, "_viewport_initialized"):
-        self._viewport_initialized = True
-        QTimer.singleShot(0, self._init_viewport_safe)
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not hasattr(self, "_viewport_initialized"):
+            self._viewport_initialized = True
+            QTimer.singleShot(0, self._init_viewport_safe)
         
-def _init_viewport_safe(self):
-    try:
-        self._init_viewport()
-        self._log("[VIZ] _init_viewport completed successfully")
-    except Exception as e:
-        self._log(f"[VIZ] _init_viewport FAILED: {e}")
-        import traceback
-        traceback.print_exc()
+    def _init_viewport_safe(self):
+        try:
+            self._init_viewport()
+            self._log("[VIZ] _init_viewport completed successfully")
+        except Exception as e:
+            self._log(f"[VIZ] _init_viewport FAILED: {e}")
+            import traceback
+            traceback.print_exc()
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
