@@ -109,21 +109,6 @@ QPushButton#btn_stop:hover {
     border-color: #cc2d2d;
 }
 
-QPushButton#btn_estop {
-    background-color: #3d0000;
-    border: 2px solid #cc0000;
-    border-radius: 4px;
-    color: #ff3333;
-    font-weight: bold;
-    font-size: 13px;
-    letter-spacing: 2px;
-    padding: 10px;
-}
-QPushButton#btn_estop:hover {
-    background-color: #5a0000;
-    border-color: #ff0000;
-    color: #ffffff;
-}
 
 QProgressBar {
     background-color: #111520;
@@ -326,7 +311,6 @@ STATUS_READY    = 1 << 0   # drvs_enabled
 STATUS_MOVING   = 1 << 1
 STATUS_HOMED    = 1 << 2
 STATUS_FAULT    = 1 << 3
-STATUS_ESTOP    = 1 << 4
 STATUS_SCANNING = 1 << 5
 STATUS_HLFB     = 1 << 6
 
@@ -539,7 +523,6 @@ class ClearCoreModbus(QThread):
                 "moving":       bool(status_word & STATUS_MOVING),
                 "homed":        bool(status_word & STATUS_HOMED),
                 "fault":        bool(status_word & STATUS_FAULT),
-                "estop":        bool(status_word & STATUS_ESTOP),
                 "scanning":     bool(status_word & STATUS_SCANNING),
                 "hlfb":         bool(status_word & STATUS_HLFB),
                 "cur_posn":     cur_posn,
@@ -596,9 +579,7 @@ class ScanWorker(QThread):
         super().__init__()
         self._paused = False
         self._stopped = False
-
-    def pause(self): self._paused = True
-    def resume(self): self._paused = False
+        
     def stop(self): self._stopped = True; self._paused = False
 
     def run(self):
@@ -635,7 +616,6 @@ class ScanToMillUI(QMainWindow):
         self.showMaximized()
         self._scan_worker = None
         self._scan_running = False
-        self._scan_paused = False
         self._point_count = 0
         self._build_ui()
         self._init_viewport()
@@ -667,7 +647,7 @@ class ScanToMillUI(QMainWindow):
     def _on_modbus_status(self, status: dict):
         # Log only on change to avoid flooding the console
         prev = self._modbus_last_status
-        flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
+        flag_keys = ("ready", "moving", "homed", "fault", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
         if changed:
             flags = " ".join(
@@ -692,7 +672,6 @@ class ScanToMillUI(QMainWindow):
         body.setSpacing(10)
         body.addWidget(self._make_left_panel(), stretch=0)
         body.addWidget(self._make_viewport_panel(), stretch=1)
-        body.addWidget(self._make_right_panel(), stretch=0)
         root.addLayout(body, stretch=1)
 
         root.addWidget(self._make_bottom_panel())
@@ -738,22 +717,17 @@ class ScanToMillUI(QMainWindow):
 
         self.btn_start = QPushButton("▶  START SCAN")
         self.btn_start.setObjectName("btn_start")
-        self.btn_pause = QPushButton("⏸  PAUSE")
-        self.btn_pause.setEnabled(False)
         self.btn_stop = QPushButton("■  STOP")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.setEnabled(False)
+        self.btn_view_reset = QPushButton("⌂  Reset Camera/Home")
 
         self.btn_start.clicked.connect(self._on_start)
-        self.btn_pause.clicked.connect(self._on_pause)
         self.btn_stop.clicked.connect(self._on_stop)
+        self.btn_view_reset.clicked.connect(self._reset_camera)
 
-        for b in [self.btn_start, self.btn_pause, self.btn_stop]:
+        for b in [self.btn_start, self.btn_stop, self.btn_view_reset]:
             g.addWidget(b)
-
-        g.addSpacing(6)
-        g.addWidget(self._labeled_combo("Resolution", ["640×480", "1280×720", "848×480"]))
-        g.addWidget(self._labeled_combo("Scan Mode", ["Depth Only", "Depth + RGB", "IR"]))
 
         lay.addWidget(grp)
 
@@ -769,22 +743,19 @@ class ScanToMillUI(QMainWindow):
         return w
 
     def _make_viewport_panel(self):
-        grp = QGroupBox("3D Viewport")
-        lay = QVBoxLayout(grp)
-        lay.setContentsMargins(4, 12, 4, 4)
-
         toolbar = QHBoxLayout()
         self.btn_view_cloud = QPushButton("Point Cloud")
         self.btn_view_mesh = QPushButton("Mesh")
-        self.btn_view_reset = QPushButton("Reset Camera/Home")
+        self.btn_view_cnc_preview = QPushButton("CNC Preview")
         self.lbl_render_mode = QLabel("MODE: POINT CLOUD")
         self.lbl_render_mode.setObjectName("value_display")
 
         self.btn_view_cloud.clicked.connect(lambda: self._set_view_mode("cloud"))
         self.btn_view_mesh.clicked.connect(lambda: self._set_view_mode("mesh"))
-        self.btn_view_reset.clicked.connect(self._reset_camera)
+        self.btn_view_cnc_preview.clicked.connect(self._on_cnc_preview)
 
-        for w2 in [self.btn_view_cloud, self.btn_view_mesh, self.btn_view_reset, self.lbl_render_mode]:
+        for w2 in [self.btn_view_cloud, self.btn_view_mesh,
+                   self.btn_view_cnc_preview, self.lbl_render_mode]:
             toolbar.addWidget(w2)
         toolbar.addStretch()
         lay.addLayout(toolbar)
@@ -796,72 +767,6 @@ class ScanToMillUI(QMainWindow):
         lay.addWidget(self.vtk_frame, stretch=1)
 
         return grp
-
-    def _make_right_panel(self):
-        w = QWidget()
-        w.setFixedWidth(210)
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
-
-        # ── CNC Controls ──
-        grp = QGroupBox("CNC Controls")
-        g = QVBoxLayout(grp)
-
-        self.btn_home = QPushButton("⌂  Home All Axes")
-        self.btn_send_gcode = QPushButton("▶  Run G-Code")
-        self.btn_send_gcode.setEnabled(False)
-        self.btn_pause_cnc = QPushButton("⏸  Pause Job")
-        self.btn_pause_cnc.setEnabled(False)
-
-        for b in [self.btn_home, self.btn_send_gcode, self.btn_pause_cnc]:
-            g.addWidget(b)
-
-        g.addSpacing(6)
-
-        # DRO
-        for axis, val in [("X", "0.000"), ("Y", "0.000"), ("Z", "0.000")]:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(f"  {axis}:"))
-            lbl = QLabel(val + " mm")
-            lbl.setObjectName("value_display")
-            setattr(self, f"dro_{axis}", lbl)
-            row.addWidget(lbl)
-            g.addLayout(row)
-
-        g.addSpacing(6)
-        g.addWidget(QLabel("Feed Rate Override"))
-        self.slider_feed = QSlider(Qt.Horizontal)
-        self.slider_feed.setRange(0, 200)
-        self.slider_feed.setValue(100)
-        self.lbl_feed_val = QLabel("100 %")
-        self.lbl_feed_val.setObjectName("value_display")
-        self.slider_feed.valueChanged.connect(lambda v: self.lbl_feed_val.setText(f"{v} %"))
-        g.addWidget(self.slider_feed)
-        g.addWidget(self.lbl_feed_val)
-
-        g.addSpacing(6)
-        g.addWidget(QLabel("Spindle RPM"))
-        self.slider_rpm = QSlider(Qt.Horizontal)
-        self.slider_rpm.setRange(0, 24000)
-        self.slider_rpm.setValue(12000)
-        self.lbl_rpm_val = QLabel("12000 RPM")
-        self.lbl_rpm_val.setObjectName("value_display")
-        self.slider_rpm.valueChanged.connect(lambda v: self.lbl_rpm_val.setText(f"{v} RPM"))
-        g.addWidget(self.slider_rpm)
-        g.addWidget(self.lbl_rpm_val)
-
-        lay.addWidget(grp)
-
-        # ── E-Stop ──
-        self.btn_estop = QPushButton("⚠  EMERGENCY STOP")
-        self.btn_estop.setObjectName("btn_estop")
-        self.btn_estop.setFixedHeight(54)
-        self.btn_estop.clicked.connect(self._on_estop)
-        lay.addWidget(self.btn_estop)
-
-        lay.addStretch()
-        return w
 
     def _make_bottom_panel(self):
         w = QWidget()
@@ -965,9 +870,7 @@ class ScanToMillUI(QMainWindow):
     # ── Scan Actions ──────────────────────────────────────────────────────────
     def _on_start(self):
         self._scan_running = True
-        self._scan_paused = False
         self.btn_start.setEnabled(False)
-        self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
         self.progress_bar.setFormat("%p%  —  SCANNING")
@@ -987,23 +890,6 @@ class ScanToMillUI(QMainWindow):
         # Tell the ClearCore to begin its scan motion profile
         self._modbus.send_command(CCMD_RUN_1)
 
-    def _on_pause(self):
-        if not self._scan_paused:
-            self._scan_paused = True
-            self._scan_worker.pause()
-            self._modbus.send_command(CCMD_STOP)
-            self.btn_pause.setText("▶  RESUME")
-            self.progress_bar.setFormat("%p%  —  PAUSED")
-            self.lbl_stage.setText("PAUSED")
-            self._log("[SCAN] Paused.")
-        else:
-            self._scan_paused = False
-            self._scan_worker.resume()
-            self._modbus.send_command(CCMD_RUN_1)
-            self.btn_pause.setText("⏸  PAUSE")
-            self.progress_bar.setFormat("%p%  —  SCANNING")
-            self.lbl_stage.setText("SCANNING")
-            self._log("[SCAN] Resumed.")
 
     def _on_stop(self):
         if self._scan_worker:
@@ -1023,12 +909,9 @@ class ScanToMillUI(QMainWindow):
 
     def _reset_scan_ui(self):
         self._scan_running = False
-        self._scan_paused = False
         if hasattr(self, "_scan_timer"):
             self._scan_timer.stop()
         self.btn_start.setEnabled(True)
-        self.btn_pause.setEnabled(False)
-        self.btn_pause.setText("⏸  PAUSE")
         self.btn_stop.setEnabled(False)
 
     def _on_progress(self, val: int):
@@ -1046,21 +929,10 @@ class ScanToMillUI(QMainWindow):
         self._scan_elapsed += 1
         m, s = divmod(self._scan_elapsed, 60)
         self.lbl_elapsed.setText(f"{m:02d}:{s:02d}")
-
-    # ── E-Stop ────────────────────────────────────────────────────────────────
-    def _on_estop(self):
-        # Fire the hardware estop first, before any UI bookkeeping
-        if hasattr(self, "_modbus"):
-            # Teknic-style software E-stop: halt motion then drop enable
-            self._modbus.send_command(CCMD_STOP)
-            self._modbus.send_command(CCMD_DISAB_MTRS)
-        self._on_stop()
-        self._log("[!!!] EMERGENCY STOP TRIGGERED — all motion halted.")
-        self.lbl_stage.setText("E-STOP")
-        self.progress_bar.setFormat("E-STOP")
-        self.progress_bar.setStyleSheet(
-            "QProgressBar::chunk { background-color: #8b0000; }"
-        )
+        
+    def _on_cnc_preview(self):
+        """ Placeholder — will render the CNC toolpath preview in the viewport."""
+        self._log("[VIEW] CNC preview not yet implemented.")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _log(self, msg: str):
