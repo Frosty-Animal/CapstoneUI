@@ -54,7 +54,7 @@ of those things is broken.
 
 | Component | Notes |
 |---|---|
-| Raspberry Pi 5 (4 GB or 8 GB) | Running Raspberry Pi OS Bookworm or Trixie |
+| Raspberry Pi 5 (16GB) | Running Raspberry Pi OS Bookworm or Trixie |
 | Official 7" Raspberry Pi Touchscreen | Or any HDMI display ≥ 1280×800 |
 | Teknic ClearCore (CLCR-4-13) | The motion controller |
 | ClearPath-SD or generic stepper | M-0 connector, step-and-direction mode |
