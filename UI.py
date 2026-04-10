@@ -846,17 +846,23 @@ class ScanToMillUI(QMainWindow):
                 self._cloud, scalars="depth", cmap="cool",
                 point_size=3, render_points_as_spheres=True,
                 name="pointcloud", show_scalar_bar=False
-            )
+            )    
         else:
             self.lbl_render_mode.setText("MODE: MESH")
             self.plotter.remove_actor("pointcloud")
+            if self._cloud is None or self._cloud.n_points < 4:
+                # Need at least a few points for surface reconstruction.
+                self._log("[VIZ] Mesh view: not enough points yet.")
+                self.plotter.render()
+                return
             surf = self._cloud.reconstruct_surface(nbr_sz=10)
             self.plotter.add_mesh(
                 surf, color="#2a5a7a", show_edges=False,
                 opacity=1.0, name="mesh_actor",
-                pbr=False, interpolate_before_map=False
-)
+                pbr=False, interpolate_before_map=False,
+            )
         self.plotter.render()
+
 
     def _reset_camera(self):
         if not hasattr(self, "plotter"):
@@ -1014,6 +1020,7 @@ if __name__ == "__main__":
     pv.set_plot_theme("dark")
     pv.global_theme.multi_samples = 1        # <-- add this
     pv.global_theme.smooth_shading = False
+    pv.global_theme.allow_empty_mesh = True   # placeholder cloud has 0 points
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLE)
     window = ScanToMillUI()
