@@ -8,6 +8,11 @@ import sys
 import queue
 import numpy as np
 import os
+# Force Qt to use the X11 (xcb) platform plugin instead of Wayland.
+# VTK's rendering code talks directly to X11 and gets BadWindow errors
+# when Qt is using the wayland backend on Raspberry Pi OS. xcb works
+# correctly on both X11 and Wayland sessions (via XWayland).
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
