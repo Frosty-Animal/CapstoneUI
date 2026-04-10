@@ -82,17 +82,22 @@ Download Raspberry Pi Imager, flash Raspberry Pi OS (64-bit, Desktop) onto
 a microSD card. Boot the Pi, complete first-run setup, connect to WiFi for
 package downloads.
 
-### 2. Install dependencies on the Pi
+### 2. Set up the project's Python environment
+
+The project uses Python 3.11 inside a pyenv-managed venv. Setup is a
+one-time multi-step process — see the **Installing Python dependencies**
+section under Detailed Setup. Allow about 30 minutes including the Python
+3.11 build.
+
+After setup, every time you work on this project:
 
 ```bash
-sudo apt update
-sudo apt install -y python3-pyqt5 python3-pip libgl1 libglib2.0-0 screen
-pip install pyvista pyvistaqt pymodbus --break-system-packages
+cd ~/CapstoneUI
+source venv/bin/activate    # pyenv switches Python; venv activates packages
 ```
 
-The `--break-system-packages` flag is required because Raspberry Pi OS marks
-the system Python as externally-managed (PEP 668). It does NOT actually
-break anything — it just installs to your user site-packages.
+You'll know you're in the right environment when your shell prompt has
+`(venv)` in front of it AND `python --version` says `Python 3.11.10`.
 
 ### 3. Configure the Pi's Ethernet for the comms link
 
@@ -144,69 +149,41 @@ ETHERNET port. No router or switch needed. Then on the Pi:
 
 ```bash
 cd ~/CapstoneUI
-python3 cc_modbus_test.py
+source venv/bin/activate
+python cc_modbus_test.py
 ```
 
-Expected output:
+(All `python3 ...` commands in this README are replaced by `python ...`
+inside the venv. The venv's `python` is Python 3.11.10. Outside the venv,
+`python` may be the wrong version or may not exist at all.)
 
 ```
-ClearCore Modbus TCP comms test → 192.168.1.20:502 unit 1
-
-[1/3] TCP layer: can we open a socket to 192.168.1.20:502?
-  ✓ TCP connect to 192.168.1.20:502 succeeded
-
-[2/3] Modbus layer: pymodbus client open
-  ✓ pymodbus connected
-
-[3/3] Protocol layer: read holding register 0 (unit 1)
-  ✓ Read OK: HR0 = 100000
-
-All three layers OK. Comms link is healthy.
-
-Current ClearCore status:
-  cur_posn  :    +5000 steps
-  state     : RUNNING
-  status    : 0x0023  READY MOVING SCANNING
-  msg_cnt   : 3
-  msg       : SEQ1 RUNNING
-
-cc>
-```
-
-You're now in the interactive shell. Type `watch` to see the motor position
-flip back and forth in real time, then Ctrl+C and type `stop` to halt the
-motor. Type `q` to exit.
-
-If you got here, **everything works**. The rest of this README is for when
-something doesn't, or when you want to understand what you just did.
-
----
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Raspberry Pi 5                                │
-│                                                                      │
-│   ┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐  │
-│   │   UI.py      │    │ cc_modbus_test.py│    │  (future)       │  │
-│   │  (PyQt6 +    │    │  (CLI tester)    │    │  Camera capture │  │
-│   │   PyVista)   │    │                  │    │  pipeline       │  │
-│   └──────┬───────┘    └────────┬─────────┘    └─────────────────┘  │
-│          │                     │                                     │
-│          └─────────┬───────────┘                                     │
-│                    │                                                 │
-│           ┌────────▼─────────┐                                       │
-│           │   pymodbus       │                                       │
-│           │   ModbusTcpClient│                                       │
-│           └────────┬─────────┘                                       │
-│                    │ TCP/IP                                          │
-│                    │                                                 │
-│              ┌─────▼──────┐                                          │
-│              │   eth0     │ 192.168.1.10                             │
-│              │  (RJ-45)   │                                          │
-│              └─────┬──────┘                                          │
-└────────────────────┼─────────────────────────────────────────────────┘
+│                        Raspberry Pi 5                               │
+│                                                                     │
+│   ┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐   │
+│   │   UI.py      │    │ cc_modbus_test.py│    │  (future)       │   │
+│   │  (PyQt6 +    │    │  (CLI tester)    │    │  Camera capture │   │
+│   │   PyVista)   │    │                  │    │  pipeline       │   │
+│   └──────┬───────┘    └────────┬─────────┘    └─────────────────┘   │
+│          │                     │                                    │
+│          └─────────┬───────────┘                                    │
+│                    │                                                │
+│           ┌────────▼─────────┐                                      │
+│           │   pymodbus       │                                      │
+│           │   ModbusTcpClient│                                      │
+│           └────────┬─────────┘                                      │
+│                    │ TCP/IP                                         │
+│                    │                                                │
+│              ┌─────▼──────┐                                         │
+│              │   eth0     │ 192.168.1.10                            │
+│              │  (RJ-45)   │                                         │
+│              └─────┬──────┘                                         │
+└────────────────────┼────────────────────────────────────────────────┘
                      │
                Ethernet cable
                      │
@@ -232,7 +209,7 @@ something doesn't, or when you want to understand what you just did.
 │           └────────┬─────────┘                                       │
 │                    │                                                 │
 │           ┌────────▼─────────┐    ┌────────────────┐                 │
-│           │  Motion state    │───▶│  ConnectorM0   │                 │
+│           │  Motion state    │───▶│  ConnectorM0   │                 |
 │           │  machine         │    │  (StepGen)     │                 │
 │           └──────────────────┘    └────────────────┘                 │
 │                                                                      │
@@ -285,99 +262,155 @@ may differ.
 
 ### Installing Python dependencies
 
-The project needs:
+**Important:** Raspberry Pi OS Trixie ships Python 3.13 as its system Python,
+but several of this project's dependencies (most notably Open3D) only have
+ARM64 wheels available for Python 3.11. Trying to install them against the
+system Python will fail with `Could not find a version that satisfies the
+requirement` errors. The project therefore uses a dedicated Python 3.11
+environment built with `pyenv`.
 
-- **PyQt5 or PyQt6** — UI framework. The code prefers PyQt6 and falls back
-  to PyQt5 automatically. On the Pi, install PyQt5 via apt because PyQt6
-  doesn't have a prebuilt wheel for ARM and pip would try to compile it
-  from source (slow and frequently fails).
-- **PyVista + pyvistaqt** — 3D visualization for the point cloud viewport
-- **pymodbus** — Modbus client library
-- **numpy** — implied by PyVista
-- **screen** — for reading the ClearCore's USB serial debug log
+This is a one-time setup. Once it's done, you don't have to think about it
+again — your venv is "the right Python" and everything inside it just works.
 
-Install order (this is the right sequence for a fresh Pi):
+#### Step 1: Install pyenv build dependencies
 
 ```bash
 sudo apt update
-sudo apt install -y python3-pyqt5 python3-pip libgl1 libglib2.0-0 screen
-pip install pyvista pyvistaqt pymodbus --break-system-packages
+sudo apt install -y make build-essential libssl-dev zlib1g-dev \
+    libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
+    libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+    libffi-dev liblzma-dev
 ```
 
-Verify everything imports cleanly before going further:
+These are the libraries Python's source build needs. Most are also dragged
+in by Open3D's runtime requirements, so installing them now saves a round
+trip later.
+
+#### Step 2: Install pyenv
 
 ```bash
-python3 -c "import pyvista, pyvistaqt, PyQt5, numpy, pymodbus; print('all good')"
+curl https://pyenv.run | bash
 ```
 
-If that prints `all good`, your Python environment is ready.
-
-### Network configuration
-
-This is the part that bites everyone. **Raspberry Pi OS does not assign
-an IP address to `eth0` by default.** It assumes you'll either plug into
-a router (which would hand out DHCP) or configure it manually. For a
-direct Pi-to-ClearCore cable, neither happens automatically.
-
-You can confirm this is the issue by running `ip addr show eth0` and
-looking for an `inet` line. If you only see `inet6 fe80::...` (the IPv6
-link-local address that always exists on a live link), the interface has
-no IPv4 address and can't reach the ClearCore.
-
-The fix is to configure a static IP on `eth0` using NetworkManager:
+Then add pyenv to your shell config:
 
 ```bash
-nmcli connection show
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(pyenv init - bash)"' >> ~/.bashrc
+exec bash
 ```
 
-Find the connection name for `eth0`. On Bookworm/Trixie this is typically
-`netplan-eth0` (because netplan generates it during install). Then:
+Verify with `pyenv --version` — should print `pyenv 2.x.x`.
+
+#### Step 3: Build Python 3.11
 
 ```bash
-sudo nmcli connection modify netplan-eth0 ipv4.method manual ipv4.addresses 192.168.1.10/24 ipv4.gateway "" ipv6.method ignore
-sudo nmcli connection down netplan-eth0
-sudo nmcli connection up netplan-eth0
+pyenv install 3.11.10
 ```
 
-The empty `ipv4.gateway ""` is intentional and important. Setting it would
-tell the Pi to route default traffic through the ClearCore, which has no
-internet connection. With no gateway on this interface, the Pi only uses
-`eth0` for traffic destined for `192.168.1.0/24` and continues using
-`wlan0` for everything else, including internet access.
+This compiles Python from source and takes 15–25 minutes on a Pi 5. Walk
+away, come back when it's done. Verify with `pyenv versions` — should
+list `3.11.10`.
 
-Verify:
+#### Step 4: Create the project venv
 
 ```bash
-ip addr show eth0       # should show inet 192.168.1.10/24
-ping -c 4 192.168.1.20  # only works if the ClearCore is also up
+cd ~/CapstoneUI
+pyenv local 3.11.10        # writes .python-version, locks this dir to 3.11
+python -m venv venv
+source venv/bin/activate
+python --version           # should say Python 3.11.10
 ```
 
-This config persists across reboots.
+The `pyenv local` command creates a `.python-version` file in `~/CapstoneUI`
+that pyenv reads automatically. Whenever you `cd` into this directory, your
+shell will pick up Python 3.11 instead of the system 3.13. **You still need
+to `source venv/bin/activate`** to enter the venv itself — pyenv handles the
+interpreter, venv handles the package isolation.
 
-### Display setup (Pi 5 + Wayland)
-
-The Pi 5 on Bookworm/Trixie defaults to Wayland (Wayfire compositor), which
-PyVista's VTK rendering doesn't always handle gracefully. If you launch
-`UI.py` and get an error like `BadWindow (invalid Window parameter)` from
-the X server, force Qt to use the X11 platform plugin via XWayland:
+#### Step 5: Install Python packages
 
 ```bash
-QT_QPA_PLATFORM=xcb python3 UI.py
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-To make this permanent:
+This pulls everything from PyPI, with **piwheels** (`https://www.piwheels.org/simple`)
+as a secondary index that provides prebuilt ARM64 wheels for things PyPI
+doesn't have. Piwheels is the secret sauce that makes Open3D installable
+on the Pi at all — without it, you'd be doing a multi-hour from-source
+build that fails in a dozen different ways.
+
+#### Step 6: Sanity check
 
 ```bash
-echo 'export QT_QPA_PLATFORM=xcb' >> ~/.bashrc
-source ~/.bashrc
+python -c "
+import sys; print('python:', sys.version.split()[0])
+import open3d; print('open3d:', open3d.__version__)
+import pyvista, pyvistaqt
+print('pyvista:', pyvista.__version__, 'pyvistaqt:', pyvistaqt.__version__)
+import vtkmodules.vtkCommonCore as cc
+print('vtk:', cc.vtkVersion.GetVTKVersion())
+import PyQt6
+print('PyQt6: ok')
+import pymodbus
+print('pymodbus: ok')
+"
 ```
 
-Note: the current UI layout was designed for a 1280×800 monitor minimum
-and is unusably squished on the official 7" Pi touchscreen (800×480).
-This is a known issue documented in "Future Work" below.
+Expected output (versions will drift over time but the structure should match):
 
----
+```
+python: 3.11.10
+open3d: 0.18.0
+pyvista: 0.46.3 pyvistaqt: 0.11.4
+vtk: 9.5.2
+PyQt6: ok
+pymodbus: ok
+```
 
+If you see `OpenBLAS : munmap failed::` after the script finishes, ignore
+it. It's a known harmless ARM64 OpenBLAS warning printed during process
+shutdown. Your imports succeeded.
+
+#### Notes on `requirements.txt`
+
+The pinned versions in `requirements.txt` matter. They were chosen to
+satisfy a tight web of constraints between PyVista, VTK, and Open3D that
+took several evenings to figure out. Don't bump them casually.
+
+```
+# Python 3.11 ONLY — see README "Installing Python dependencies"
+open3d==0.18.0          # piwheels has ARM64 wheel for py311 only
+pyvista==0.46.3         # works with VTK 9.5+, embeds in PyQt6
+pyvistaqt==0.11.4       # pairs with pyvista 0.46
+numpy>=1.24.0
+pymodbus>=3.5.0
+PyQt6>=6.5.0
+pyserial>=3.5
+pyyaml>=6.0
+
+# pyrealsense2 — install librealsense from source on the Pi, NOT via pip.
+# See: https://github.com/IntelRealSense/librealsense/blob/master/doc/installation_raspbian.md
+# pyrealsense2>=2.55.0
+```
+
+The historical reasons for each pin, in case you ever need to change them:
+
+- **Open3D 0.18.0** — only ARM64 wheel piwheels has for Python 3.11. Newer
+  versions (0.19+) require Python 3.12 or compile from source.
+- **PyVista 0.46.3** — 0.43 is too old (uses removed VTK class
+  `vtkCompositePolyDataMapper2`); 0.45 hard-pins `vtk<9.5` which piwheels
+  doesn't have; 0.47 introduced an embedding regression on Pi where the
+  viewport pops out as a separate window. 0.46 is the sweet spot.
+- **VTK 9.5.2** — what piwheels offers and what PyVista 0.46 accepts. Not
+  pinned explicitly in requirements.txt because PyVista's own dependency
+  metadata picks it correctly.
+- **PyQt6** — replaces apt's PyQt5. The fallback `import PyQt5` block in
+  `UI.py` exists for portability but the canonical setup is PyQt6 from pip
+  inside the venv.
+  
 ## Detailed Setup — ClearCore
 
 ### Installing the ClearCore Arduino board package
@@ -623,15 +656,26 @@ not `EthernetTcpServer`/`EthernetTcpClient`/`EthernetMgr.Setup()`.
 
 ### `BadWindow (invalid Window parameter)` when launching UI.py on Pi 5
 
-Force Qt to use the X11 backend via XWayland:
+The current `UI.py` sets `QT_QPA_PLATFORM=xcb` automatically at the top
+of the file, before any Qt imports. If you're still seeing this error,
+either:
+
+1. You're running an old version of `UI.py` that doesn't have the env
+   var set. Pull the latest from the repo.
+2. You've modified the file and accidentally moved the env var setting
+   to *after* an `import PyQt6` or `import pyvista` line. Qt only reads
+   the env var on first import — it must be set first. Check the top
+   of the file.
+
+If neither applies, you can still force it from the command line as a
+sanity check:
 
 ```bash
-QT_QPA_PLATFORM=xcb python3 UI.py
+QT_QPA_PLATFORM=xcb python UI.py
 ```
 
-Pi 5 on Bookworm/Trixie defaults to Wayland, which PyVista's VTK
-rendering doesn't always handle. XWayland is the workaround until VTK
-gets better Wayland support.
+If that works but `python UI.py` alone doesn't, the env var line in the
+file isn't taking effect. Compare against the version in the repo.
 
 ### `[MODBUS] Failed to reach ClearCore at 192.168.1.20:502` even though everything is plugged in
 
@@ -702,6 +746,78 @@ space with `df -h /` — VTK plus dependencies want about 500 MB free.
 `python` and `python3` are different interpreters on Raspberry Pi OS,
 and pymodbus was installed for `python3`. Always use `python3` explicitly.
 
+### `Could not find a version that satisfies the requirement open3d>=0.18.0`
+
+You're trying to `pip install open3d` against Python 3.13 (the system Python
+on Raspberry Pi OS Trixie). Open3D's piwheels wheels are built for Python
+3.11 only. Solution: use the project's pyenv-managed Python 3.11 venv. See
+the "Installing Python dependencies" section for setup.
+
+If you've already done the venv setup but still see this error, run
+`python --version` — if it says 3.13, your venv isn't activated. Run
+`source venv/bin/activate` from `~/CapstoneUI` and try again.
+
+### `Could not find a version that satisfies the requirement pyrealsense2>=2.55.0`
+
+`pyrealsense2` doesn't ship ARM64 wheels at all. The Python bindings have
+to be installed by building librealsense from source on the Pi. See:
+https://github.com/IntelRealSense/librealsense/blob/master/doc/installation_raspbian.md
+
+This is a known multi-hour build. Until you actually need camera capture,
+leave the line commented out in `requirements.txt` and the rest of the
+project will work fine. The scan worker currently emits placeholder data
+while pyrealsense2 isn't installed.
+
+### `ImportError: cannot import name 'vtkCompositePolyDataMapper2' from 'vtkmodules.vtkRenderingOpenGL2'`
+
+You have an old PyVista (0.43.x) trying to use a class that was removed
+in VTK 9.4. Either the venv was created with the wrong PyVista pin or
+something downgraded it. Fix:
+
+```bash
+pip install "pyvista==0.46.3" "pyvistaqt==0.11.4"
+```
+
+### VTK viewport pops out as a separate window instead of embedding in the UI
+
+Two possible causes, both addressed in the current `UI.py`:
+
+1. **Viewport initialized too early.** PyVista's QtInteractor must be
+   created *after* the Qt window is shown, not during `__init__`. The
+   current code uses `showEvent` to defer init via `QTimer.singleShot`.
+   If you've reverted that, the embedding will break.
+
+2. **Qt running on Wayland instead of X11.** PyVista's VTK rendering only
+   works correctly with the xcb (X11) backend on Pi 5. The current `UI.py`
+   forces this with `os.environ["QT_QPA_PLATFORM"] = "xcb"` at the very
+   top of the file, before any Qt or PyVista imports. **Order matters** —
+   Qt reads the env var exactly once when first imported.
+
+### `[VIZ] _init_viewport FAILED: Install IPython to display with pyvista in a notebook`
+
+You have a stray `pv.set_jupyter_backend(None)` call somewhere in
+`_init_viewport`. PyVista 0.46 tries to validate the backend by importing
+IPython even when passing `None`. Just delete the line — you don't need it,
+and it doesn't do what its name suggests.
+
+### `ValueError: Empty meshes cannot be plotted` when clicking Point Cloud or Mesh
+
+PyVista 0.46 refuses to plot meshes with zero points. The placeholder
+cloud has zero points until camera data starts flowing. Fix at app
+startup, in the `__main__` block:
+
+```python
+pv.global_theme.allow_empty_mesh = True
+```
+
+The Mesh button additionally needs a guard against running surface
+reconstruction on too-few points. See `_set_view_mode` in `UI.py`.
+
+### `OpenBLAS : munmap failed:: Invalid argument` after a script exits
+
+Harmless. OpenBLAS prints this on ARM64 during process teardown when its
+memory release call hits a kernel alignment edge case. Your script's
+output before this line is the real result and is correct. Ignore it.
 ---
 
 ## Project Structure
