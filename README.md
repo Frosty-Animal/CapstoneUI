@@ -966,9 +966,10 @@ School of Electrical and Computer Engineering, 2025–2026
 For when you've forgotten everything and just need to get back to a
 working state. Tape this to the wall.
 
-```
+```bash
 # Pi network setup (one-time)
-sudo nmcli connection modify netplan-eth0 ipv4.method manual ipv4.addresses 192.168.1.10/24 ipv4.gateway "" ipv6.method ignore
+sudo nmcli connection modify netplan-eth0 ipv4.method manual \
+  ipv4.addresses 192.168.1.10/24 ipv4.gateway "" ipv6.method ignore
 sudo nmcli connection down netplan-eth0
 sudo nmcli connection up netplan-eth0
 
@@ -982,9 +983,14 @@ ping -c 4 192.168.1.20
 sudo screen /dev/ttyACM0 9600
 # (exit with Ctrl+A then \ then y)
 
-# Run the comms test
-python3 cc_modbus_test.py
+# Activate the Python 3.11 venv (every session)
+cd ~/CapstoneUI
+source venv/bin/activate
+python --version    # should say 3.11.10
 
-# Run the full UI
-QT_QPA_PLATFORM=xcb python3 UI.py
+# Run the comms test
+python cc_modbus_test.py
+
+# Run the full UI (xcb is set automatically inside UI.py)
+python UI.py
 ```
