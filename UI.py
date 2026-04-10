@@ -1,5 +1,3 @@
-
-
 """
 Scan-to-Mill UI
 Presentation wireframe — dummy data, no hardware required.
@@ -12,7 +10,7 @@ import numpy as np
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
-try:a
+try:
     from pymodbus.client import ModbusTcpClient
     from pymodbus.exceptions import ModbusException
     _PYMODBUS_AVAILABLE = True
@@ -757,23 +755,14 @@ class ScanToMillUI(QMainWindow):
         g.addWidget(self._labeled_combo("Resolution", ["640×480", "1280×720", "848×480"]))
         g.addWidget(self._labeled_combo("Scan Mode", ["Depth Only", "Depth + RGB", "IR"]))
 
-        lbl_pts = QLabel("Points Captured")
-        self.lbl_point_count = QLabel("0")
-        self.lbl_point_count.setObjectName("value_display")
-        g.addWidget(lbl_pts)
-        g.addWidget(self.lbl_point_count)
-
         lay.addWidget(grp)
 
         # ── Post-Processing ──
         grp2 = QGroupBox("Post-Process")
         g2 = QVBoxLayout(grp2)
-        self.btn_filter = QPushButton("Remove Outliers")
-        self.btn_mesh = QPushButton("Generate Mesh")
         self.btn_export = QPushButton("Export STL")
-        for b in [self.btn_filter, self.btn_mesh, self.btn_export]:
-            b.setEnabled(False)
-            g2.addWidget(b)
+        self.btn_export.setEnabled(False)
+        g2.addWidget(self.btn_export)
         lay.addWidget(grp2)
 
         lay.addStretch()
@@ -787,7 +776,7 @@ class ScanToMillUI(QMainWindow):
         toolbar = QHBoxLayout()
         self.btn_view_cloud = QPushButton("Point Cloud")
         self.btn_view_mesh = QPushButton("Mesh")
-        self.btn_view_reset = QPushButton("Reset Camera")
+        self.btn_view_reset = QPushButton("Reset Camera/Home")
         self.lbl_render_mode = QLabel("MODE: POINT CLOUD")
         self.lbl_render_mode.setObjectName("value_display")
 
@@ -980,8 +969,6 @@ class ScanToMillUI(QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
-        self.btn_filter.setEnabled(False)
-        self.btn_mesh.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.progress_bar.setFormat("%p%  —  SCANNING")
         self.lbl_stage.setText("SCANNING")
@@ -1031,8 +1018,6 @@ class ScanToMillUI(QMainWindow):
         self._reset_scan_ui()
         self.progress_bar.setFormat("100%  —  COMPLETE")
         self.lbl_stage.setText("COMPLETE")
-        self.btn_filter.setEnabled(True)
-        self.btn_mesh.setEnabled(True)
         self.btn_export.setEnabled(True)
         self._log("[SYS] Post-processing options unlocked.")
 
@@ -1053,7 +1038,6 @@ class ScanToMillUI(QMainWindow):
 
     def _on_points(self, n: int):
         self._point_count = n
-        self.lbl_point_count.setText(str(n))
         self.lbl_pts_stat.setText(str(n))
         # Viewport updates will be driven by the camera pipeline, not the
         # progress counter. Hook real frames in via _update_pointcloud_live().
