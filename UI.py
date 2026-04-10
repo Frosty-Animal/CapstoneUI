@@ -836,6 +836,8 @@ class ScanToMillUI(QMainWindow):
         self._log("[VIZ] Viewport ready — awaiting camera stream")
 
     def _set_view_mode(self, mode):
+        if not hasattr(self, "plotter"):
+            return  # Viewport not initialized yet
         self._view_mode = mode
         if mode == "cloud":
             self.lbl_render_mode.setText("MODE: POINT CLOUD")
@@ -857,6 +859,8 @@ class ScanToMillUI(QMainWindow):
         self.plotter.render()
 
     def _reset_camera(self):
+        if not hasattr(self, "plotter"):
+            return
         self.plotter.camera_position = "iso"
         self.plotter.render()
 
@@ -866,6 +870,8 @@ class ScanToMillUI(QMainWindow):
         TODO: call this from the camera capture thread with a real
         pv.PolyData built from D405 depth frames.
         """
+        if not hasattr(self, "plotter"):
+            return
         if cloud is None or cloud.n_points == 0:
             return
         self._cloud = cloud
@@ -990,8 +996,16 @@ def showEvent(self, event):
     super().showEvent(event)
     if not hasattr(self, "_viewport_initialized"):
         self._viewport_initialized = True
-        QTimer.singleShot(0, self._init_viewport)
-
+        QTimer.singleShot(0, self._init_viewport_safe)
+        
+def _init_viewport_safe(self):
+    try:
+        self._init_viewport()
+        self._log("[VIZ] _init_viewport completed successfully")
+    except Exception as e:
+        self._log(f"[VIZ] _init_viewport FAILED: {e}")
+        import traceback
+        traceback.print_exc()
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
