@@ -743,6 +743,10 @@ class ScanToMillUI(QMainWindow):
         return w
 
     def _make_viewport_panel(self):
+        grp = QGroupBox("3D Viewport")
+        lay = QVBoxLayout(grp)
+        lay.setContentsMargins(4, 12, 4, 4)
+
         toolbar = QHBoxLayout()
         self.btn_view_cloud = QPushButton("Point Cloud")
         self.btn_view_mesh = QPushButton("Mesh")
