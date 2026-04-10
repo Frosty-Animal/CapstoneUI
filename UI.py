@@ -818,6 +818,10 @@ class ScanToMillUI(QMainWindow):
 
     # ── Viewport ──────────────────────────────────────────────────────────────
     def _init_viewport(self):
+
+        pv.global_theme.window_size = [800, 600]
+        pv.set_jupyter_backend(None)  # force not-a-notebook
+    
         vtk_lay = QVBoxLayout(self.vtk_frame)
         vtk_lay.setContentsMargins(0, 0, 0, 0)
 
