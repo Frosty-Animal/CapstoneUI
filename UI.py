@@ -621,7 +621,6 @@ class ScanToMillUI(QMainWindow):
         self._scan_running = False
         self._point_count = 0
         self._build_ui()
-        self._init_viewport()
         self._start_clock()
         self._init_modbus()
 
@@ -987,6 +986,11 @@ class ScanToMillUI(QMainWindow):
         self.plotter.close()
         event.accept()
 
+def showEvent(self, event):
+    super().showEvent(event)
+    if not hasattr(self, "_viewport_initialized"):
+        self._viewport_initialized = True
+        QTimer.singleShot(0, self._init_viewport)
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
