@@ -157,7 +157,6 @@ python cc_modbus_test.py
 inside the venv. The venv's `python` is Python 3.11.10. Outside the venv,
 `python` may be the wrong version or may not exist at all.)
 
-```
 
 ## Architecture Overview
 
