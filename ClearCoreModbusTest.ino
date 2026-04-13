@@ -88,17 +88,23 @@ byte MAC_PLACEHOLDER[] = { 0x24, 0x15, 0x10, 0x00, 0x00, 0x00 };
 #define MAX_TRAVEL_STEPS  1000000   // big enough to guarantee hitting a limit
 
 // Limit switches
-#define homeLimit         ConnectorIO2   // "home" side limit switch
-#define farLimit          ConnectorIO3   // "far"  side limit switch
+#define homeLimit         ConnectorIO3   // "home" side limit switch
+#define farLimit          ConnectorIO2   // "far"  side limit switch
+#define estopInput        ConnectorIO1   // emergency stop button
+
 // Active level: most mechanical NC switches read LOW when pressed.
 // If yours read HIGH when triggered, change this to true.
-#define LIMIT_ACTIVE_HIGH false
+#define LIMIT_ACTIVE_HIGH true
 
 static inline bool homeLimitHit() {
     return LIMIT_ACTIVE_HIGH ? homeLimit.State() : !homeLimit.State();
 }
 static inline bool farLimitHit() {
     return LIMIT_ACTIVE_HIGH ? farLimit.State()  : !farLimit.State();
+}
+
+static inline bool estopEngaged() {
+    return LIMIT_ACTIVE_HIGH ? estopInput.State() : !estopInput.State();
 }
 // ── Command enum (mirrors Teknic reference shared.h) ──────────────────────
 typedef enum {
@@ -256,6 +262,7 @@ void setup() {
 
 void loop() {
     // Arduino Ethernet wrapper refreshes LwIP internally on each call
+    serviceEstop();
     serviceModbus();         // the "panel stop" path
     serviceMotion();         // back-and-forth state machine
     updateStatusRegisters(); // refresh what the Pi will read next poll
@@ -275,7 +282,8 @@ void setupMotor() {
     // Limit switch inputs
     homeLimit.Mode(Connector::INPUT_DIGITAL);
     farLimit.Mode(Connector::INPUT_DIGITAL);
-    Serial.println("[MOTOR] limit switches on IO-2 (home) and IO-3 (far)");
+    estopInput.Mode(Connector::INPUT_DIGITAL);
+    Serial.println("[MOTOR] limit switches on IO-2 (home) and IO-3 (far) and e-stop on IO-1");
 }
 
 void setupEthernet() {
@@ -457,14 +465,22 @@ void sendModbusException(uint8_t *mbapHdr, uint8_t fc, uint8_t exCode) {
 
 // ── Command dispatch ──────────────────────────────────────────────────────
 void handleCommand(uint16_t cmd) {
-    sprintf(dbg, "[CMD] %u", cmd);
+    sprintf(dbg, "[CMD] entry cmd=%u CCMD_RUN_1=%u", cmd, (unsigned)CCMD_RUN_1);
     Serial.println(dbg);
+
+    if (estopEngaged() && cmd != CCMD_STOP && cmd != CCMD_DISAB_MTRS) {
+        setMsg("CMD BLOCKED - E-STOP ENGAGED");
+        regs.cmd = CCMD_NACK;
+        return;
+    }
 
     switch (cmd) {
     case CCMD_NONE:
-        return;   // no-op, don't overwrite cmd
+        Serial.println("[CMD] -> NONE branch");
+        return;
 
     case CCMD_ENAB_MTRS:
+        Serial.println("[CMD] -> ENAB branch");
         motor.EnableRequest(true);
         regs.state = CST_ENABLED;
         setMsg("MOTORS ENABLED");
@@ -506,17 +522,19 @@ void handleCommand(uint16_t cmd) {
         break;
 
     case CCMD_RUN_1:
+        Serial.println("[CMD] -> RUN_1 branch, calling startSequence1()");
         startSequence1();
+        Serial.println("[CMD] -> returned from startSequence1()");
         break;
 
     default:
-        sprintf(dbg, "[CMD] unknown %u", cmd);
+        sprintf(dbg, "[CMD] -> DEFAULT branch, unknown %u", cmd);
         Serial.println(dbg);
         regs.cmd = CCMD_NACK;
         return;
     }
 
-    // Clear the command latch so stale values don't re-fire on the next poll
+    Serial.println("[CMD] exit, clearing latch");
     regs.cmd = CCMD_NONE;
 }
 
@@ -525,23 +543,38 @@ void startSequence1() {
     motor.VelMax(SCAN_VEL_SPS);
     motor.AccelMax(SCAN_ACCEL_SPSPS);
     motor.EnableRequest(true);
+    
+    Serial.println("[SEQ1] >>> startSequence1() called");
 
-    // If we're already sitting on the home switch, skip straight to scanning.
+    sprintf(dbg, "[SEQ1] limit reads: home=%d far=%d",
+            homeLimitHit(), farLimitHit());
+    Serial.println(dbg);
+
+    Serial.println("[SEQ1] setting VelMax");
+    motor.VelMax(SCAN_VEL_SPS);
+    Serial.println("[SEQ1] setting AccelMax");
+    motor.AccelMax(SCAN_ACCEL_SPSPS);
+    Serial.println("[SEQ1] EnableRequest(true)");
+    motor.EnableRequest(true);
+    
+    if (motionState == MS_DISABLED) {
+        delay(2000);
+    }
     if (homeLimitHit()) {
+        Serial.println("[SEQ1] branch: already home -> scanning");
         motionState = MS_SCANNING;
         regs.state  = CST_RUNNING;
         motor.Move(MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
         setMsg("SEQ1: already home, scanning");
-        Serial.println("[SEQ1] already home -> scanning");
         return;
     }
 
-    // Otherwise drive toward the home side. Negative direction is "home".
+    Serial.println("[SEQ1] branch: homing");
     motionState = MS_HOMING;
     regs.state  = CST_RUNNING;
     motor.Move(-MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
     setMsg("SEQ1: homing");
-    Serial.println("[SEQ1] homing");
+    Serial.println("[SEQ1] <<< startSequence1() done, motionState=MS_HOMING");
 }
 
 // ── Motion state machine ──────────────────────────────────────────────────
@@ -627,7 +660,7 @@ void updateStatusRegisters() {
                         motionState == MS_SCANNING ||
                         motionState == MS_RETURNING) ? 1 : 0;
     s.b.fault        = (regs.state == CST_FAULT) ? 1 : 0;
-    s.b.estop        = 0;
+    s.b.estop = estopEngaged() ? 1 : 0;
     s.b.homed        = 0;
     s.b.hlfb         = 0;
     regs.status = s;
@@ -652,4 +685,25 @@ void setMsg(const char *text) {
 // Just set a flag; serviceMotion() does the real work next loop iteration.
 void panicButtonISR() {
     stopRequested = true;
+}
+
+void serviceEstop() {
+    static bool prevEngaged = false;
+    bool engaged = estopEngaged();
+
+    if (engaged && !prevEngaged) {
+        // Rising edge — just got pressed
+        motor.MoveStopAbrupt();
+        motor.EnableRequest(false);
+        motionState = MS_DISABLED;
+        regs.state  = CST_FAULT;
+        setMsg("E-STOP ENGAGED");
+        Serial.println("[ESTOP] engaged");
+    } else if (!engaged && prevEngaged) {
+        // Released — don't auto-enable, operator must re-arm from UI
+        setMsg("E-STOP CLEARED - press ENABLE to rearm");
+        Serial.println("[ESTOP] released");
+        regs.state = CST_IDLE;
+    }
+    prevEngaged = engaged;
 }
