@@ -655,14 +655,10 @@ class ScanToMillUI(QMainWindow):
         prev = self._modbus_last_status
         flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
-        if changed:
-            flags = " ".join(
-                k.upper() for k in flag_keys if status.get(k)
-            ) or "—"
-            self._log(f"[MODBUS] STATUS: {flags}  pos={status['cur_posn']}")
-
-        # E-stop edge handling
-        estop_now = status.get("estop", False)
+        if status.get("fault") and not prev.get("fault"):
+            code = status.get("fault_code", "n/a")
+            self._log(f"[MODBUS] !! FAULT (code {code})")
+            estop_now = status.get("estop", False)
         if estop_now and not self._estop_active:
             self._estop_active = True
             self._on_estop_engaged()
