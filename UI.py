@@ -628,7 +628,7 @@ class ScanToMillUI(QMainWindow):
         else:
             self._log("[MODBUS] ClearCore link DOWN.")
 
-   def _on_modbus_status(self, status: dict):
+    def _on_modbus_status(self, status: dict):
         prev = self._modbus_last_status
         flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
