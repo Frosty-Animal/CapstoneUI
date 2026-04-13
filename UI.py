@@ -629,7 +629,6 @@ class ScanToMillUI(QMainWindow):
             self._log("[MODBUS] ClearCore link DOWN.")
 
     def _on_modbus_status(self, status: dict):
-        # Log only on change to avoid flooding the console
         prev = self._modbus_last_status
         flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
@@ -651,7 +650,24 @@ class ScanToMillUI(QMainWindow):
             self._estop_active = False
             self._on_estop_cleared()
 
+        # Scan-complete edge: scanning bit fell from true to false
+        # while a scan was in progress (and we didn't fault/e-stop out)
+        if (self._scan_running
+                and prev.get("scanning")
+                and not status.get("scanning")
+                and not status.get("fault")
+                and not status.get("estop")):
+            self._on_scan_complete()
+
         self._modbus_last_status = status
+
+    def _on_scan_complete(self):
+        self._log("[SYS] Scan complete — parked at home.")
+        self._reset_scan_ui()
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("COMPLETE")
+        self.lbl_stage.setText("COMPLETE")
+        self.btn_export.setEnabled(True)
 
     def _on_estop_engaged(self):
         self._log("[SYS] !! EMERGENCY STOP ENGAGED !!")
