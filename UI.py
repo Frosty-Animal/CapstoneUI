@@ -613,15 +613,15 @@ class ScanToMillUI(QMainWindow):
             elif prev.get("scanning") and not status.get("scanning"):
                 # Was scanning, now stopped — scan done
                 self._on_scan_done_real()
-                
-   def _on_scan_done_real(self):
+
+    def _on_scan_done_real(self):
         self._reset_scan_ui()
         self.progress_bar.setFormat("COMPLETE")
         self.progress_bar.setValue(100)
         self.lbl_stage.setText("COMPLETE")
         self.btn_export.setEnabled(True)
         self._log("[SYS] Scan complete.")
-       
+
     def _on_modbus_connected(self, ok: bool):
         if ok:
             self._log("[MODBUS] ClearCore link ESTABLISHED.")
@@ -629,7 +629,6 @@ class ScanToMillUI(QMainWindow):
             self._log("[MODBUS] ClearCore link DOWN.")
 
     def _on_modbus_status(self, status: dict):
-        # Log only on change to avoid flooding the console
         prev = self._modbus_last_status
         flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
@@ -651,12 +650,40 @@ class ScanToMillUI(QMainWindow):
             self._estop_active = False
             self._on_estop_cleared()
 
+        # Scan-started edge: scanning bit went from false to true
+        if (self._scan_running
+                and not prev.get("scanning")
+                and status.get("scanning")
+                and not self._progress_timer.isActive()):
+            self.progress_bar.setFormat("%p%  —  SCANNING")
+            self.lbl_stage.setText("SCANNING")
+            self._progress_timer.start(100)   # 10 Hz
+
+        # Scan-complete edge: scanning bit went from true to false,
+        # and we didn't fault/e-stop out
+        if (self._scan_running
+                and prev.get("scanning")
+                and not status.get("scanning")
+                and not status.get("fault")
+                and not status.get("estop")):
+            self._on_scan_complete()
+
         self._modbus_last_status = status
+
+    def _on_scan_complete(self):
+        self._progress_timer.stop()
+        self._log("[SYS] Scan complete — parked at home.")
+        self._reset_scan_ui()
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("COMPLETE")
+        self.lbl_stage.setText("COMPLETE")
+        self.lbl_remaining.setText("0s")
+        self.btn_export.setEnabled(True)
 
     def _on_estop_engaged(self):
         self._log("[SYS] !! EMERGENCY STOP ENGAGED !!")
         # Force geometry in case resizeEvent hasn't sized it yet
-        w = int(self.width() * 0.6)
+        w = int(self.width() * 0.65)
         h = 120
         x = (self.width() - w) // 2
         y = (self.height() - h) // 2
@@ -912,6 +939,10 @@ class ScanToMillUI(QMainWindow):
     # ── Scan Actions ──────────────────────────────────────────────────────────
     def _on_start(self):
         self._scan_running = True
+        self.progress_bar.setValue(0)
+        self.lbl_elapsed.setText("00:00")
+        self.lbl_remaining.setText("—")
+        self.lbl_pts_stat.setText("—")
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
@@ -922,6 +953,16 @@ class ScanToMillUI(QMainWindow):
         self._scan_timer.timeout.connect(self._tick_elapsed)
         self._scan_timer.start(1000)
 
+        # Progress bar fill: 62 seconds from 0 to 100%. The timer fires
+        # 10x/sec so the bar animation is smooth rather than steppy.
+        self._scan_progress_pct = 0.0
+        self._progress_timer = QTimer()
+        self._progress_timer.timeout.connect(self._tick_progress)
+        # Don't start yet — we wait until the SCANNING bit confirms we
+        # actually began. Starts from _on_modbus_status edge.
+        # Tunable: how many seconds a full scan takes.
+        self.SCAN_DURATION_SEC = 62.0
+        
         # Tell the ClearCore to begin its scan motion profile
         self._modbus.send_command(CCMD_RUN_1)
         self._log("[SYS] Scan started - commanded CCMD_RUN_1")
@@ -1043,7 +1084,7 @@ class ScanToMillUI(QMainWindow):
         self.estop_banner.hide()
         self.estop_banner.raise_()
         self._estop_active = False
-        
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # Keep the banner centered & sized to ~60% width whenever window resizes
@@ -1053,8 +1094,16 @@ class ScanToMillUI(QMainWindow):
             x = (self.width() - w) // 2
             y = (self.height() - h) // 2
             self.estop_banner.setGeometry(x, y, w, h)
-            
 
+    def _tick_progress(self):
+        # Fill the bar from 0 to 100 across SCAN_DURATION_SEC.
+        # Timer fires every 100ms, so each tick is (100/1000)/duration = % step.
+        step = (0.1 / self.SCAN_DURATION_SEC) * 100.0
+        self._scan_progress_pct = min(100.0, self._scan_progress_pct + step)
+        self.progress_bar.setValue(int(self._scan_progress_pct))
+        remaining_sec = max(0, int(self.SCAN_DURATION_SEC *
+                                    (100 - self._scan_progress_pct) / 100.0))
+        self.lbl_remaining.setText(f"{remaining_sec}s")
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")

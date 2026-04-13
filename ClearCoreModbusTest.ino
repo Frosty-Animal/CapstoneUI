@@ -172,6 +172,7 @@ struct CLIENT_INFC {
 #pragma pack(pop)
 
 const uint16_t NUM_REGS = sizeof(CLIENT_INFC) / 2;
+uint32_t rearmStartMs = 0;
 
 // Compile-time word-offset helper — matches offsetof/2 in Teknic reference
 #define W_ADDR(field) ((uint16_t)(offsetof(CLIENT_INFC, field) / 2))
@@ -192,6 +193,7 @@ CLIENT_INFC regs;  // the one and only shared register block
 
 enum MotionState {
     MS_IDLE,
+    MS_REARM_WAIT,    // waiting for drive to come up after enable
     MS_HOMING,        // moving toward homeLimit, waiting for it to trigger
     MS_SCANNING,      // slow sweep from home toward farLimit
     MS_RETURNING,     // slow return from far back to homeLimit
@@ -540,41 +542,26 @@ void handleCommand(uint16_t cmd) {
 
 // ── Sequence 1: home → scan → return ──────────────────────────────────────
 void startSequence1() {
-    motor.VelMax(SCAN_VEL_SPS);
-    motor.AccelMax(SCAN_ACCEL_SPSPS);
-    motor.EnableRequest(true);
-    
     Serial.println("[SEQ1] >>> startSequence1() called");
-
-    sprintf(dbg, "[SEQ1] limit reads: home=%d far=%d",
-            homeLimitHit(), farLimitHit());
+    sprintf(dbg, "[SEQ1] limit reads: home=%d far=%d  motionState=%d",
+            homeLimitHit(), farLimitHit(), (int)motionState);
     Serial.println(dbg);
 
-    Serial.println("[SEQ1] setting VelMax");
-    motor.VelMax(SCAN_VEL_SPS);
-    Serial.println("[SEQ1] setting AccelMax");
-    motor.AccelMax(SCAN_ACCEL_SPSPS);
-    Serial.println("[SEQ1] EnableRequest(true)");
+    // Clean enable cycle
+    motor.EnableRequest(false);
+    delay(50);   // brief; OK because <500ms Modbus timeout
     motor.EnableRequest(true);
-    
-    if (motionState == MS_DISABLED) {
-        delay(2000);
-    }
-    if (homeLimitHit()) {
-        Serial.println("[SEQ1] branch: already home -> scanning");
-        motionState = MS_SCANNING;
-        regs.state  = CST_RUNNING;
-        motor.Move(MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
-        setMsg("SEQ1: already home, scanning");
-        return;
-    }
 
-    Serial.println("[SEQ1] branch: homing");
-    motionState = MS_HOMING;
-    regs.state  = CST_RUNNING;
-    motor.Move(-MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
-    setMsg("SEQ1: homing");
-    Serial.println("[SEQ1] <<< startSequence1() done, motionState=MS_HOMING");
+    motor.VelMax(SCAN_VEL_SPS);
+    motor.AccelMax(SCAN_ACCEL_SPSPS);
+    motor.PositionRefSet(0);
+
+    // Start the rearm wait; serviceMotion() will transition to homing
+    // once the drive has settled.
+    motionState = MS_REARM_WAIT;
+    rearmStartMs = millis();
+    regs.state = CST_RUNNING;
+    setMsg("SEQ1: rearming drive");
 }
 
 // ── Motion state machine ──────────────────────────────────────────────────
@@ -591,6 +578,21 @@ void serviceMotion() {
     }
 
     switch (motionState) {
+
+    case MS_REARM_WAIT:
+        if (millis() - rearmStartMs >= 2000) {
+            Serial.println("[SEQ1] rearm complete, starting motion");
+            if (homeLimitHit()) {
+                motionState = MS_SCANNING;
+                motor.Move(MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+                setMsg("SEQ1: already home, scanning");
+            } else {
+                motionState = MS_HOMING;
+                motor.Move(-MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+                setMsg("SEQ1: homing");
+            }
+        }
+        break;
 
     case MS_HOMING:
         // Drive toward home switch; stop the instant it trips.
@@ -656,9 +658,10 @@ void updateStatusRegisters() {
     CCMTR_STATUS s;
     s.b.drvs_enabled = (motionState != MS_DISABLED) ? 1 : 0;
     s.b.moving       = !motor.StepsComplete() ? 1 : 0;
-    s.b.scanning     = (motionState == MS_HOMING ||
-                        motionState == MS_SCANNING ||
-                        motionState == MS_RETURNING) ? 1 : 0;
+    s.b.scanning = (motionState == MS_REARM_WAIT ||
+                    motionState == MS_HOMING     ||
+                    motionState == MS_SCANNING   ||
+                    motionState == MS_RETURNING) ? 1 : 0;
     s.b.fault        = (regs.state == CST_FAULT) ? 1 : 0;
     s.b.estop = estopEngaged() ? 1 : 0;
     s.b.homed        = 0;
@@ -701,9 +704,12 @@ void serviceEstop() {
         Serial.println("[ESTOP] engaged");
     } else if (!engaged && prevEngaged) {
         // Released — don't auto-enable, operator must re-arm from UI
+        motor.ClearAlerts();       // clear any drive-side latched alert
         setMsg("E-STOP CLEARED - press ENABLE to rearm");
         Serial.println("[ESTOP] released");
         regs.state = CST_IDLE;
+        motionState = MS_STOPPED;   // <-- add this; clears MS_DISABLED
+
     }
     prevEngaged = engaged;
 }
