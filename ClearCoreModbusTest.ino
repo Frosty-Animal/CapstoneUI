@@ -78,10 +78,34 @@ byte MAC_PLACEHOLDER[] = { 0x24, 0x15, 0x10, 0x00, 0x00, 0x00 };
 
 // ── Motion config ─────────────────────────────────────────────────────────
 #define motor             ConnectorM0
-#define TEST_STROKE_STEPS 5000      // back-and-forth amplitude
-#define TEST_VEL_SPS      10000     // steps/sec
+#define TEST_STROKE_STEPS 5000      // (unused now, kept for reference)
+#define TEST_VEL_SPS      10000     // steps/sec — fast (rapid)
 #define TEST_ACCEL_SPSPS  100000    // steps/sec^2
 
+// Scan/home motion (slow, deliberate)
+#define SCAN_VEL_SPS      2000      // steps/sec — slow scan/home rate
+#define SCAN_ACCEL_SPSPS  20000     // steps/sec^2
+#define MAX_TRAVEL_STEPS  1000000   // big enough to guarantee hitting a limit
+
+// Limit switches
+#define homeLimit         ConnectorIO3   // "home" side limit switch
+#define farLimit          ConnectorIO2   // "far"  side limit switch
+#define estopInput        ConnectorIO1   // emergency stop button
+
+// Active level: most mechanical NC switches read LOW when pressed.
+// If yours read HIGH when triggered, change this to true.
+#define LIMIT_ACTIVE_HIGH true
+
+static inline bool homeLimitHit() {
+    return LIMIT_ACTIVE_HIGH ? homeLimit.State() : !homeLimit.State();
+}
+static inline bool farLimitHit() {
+    return LIMIT_ACTIVE_HIGH ? farLimit.State()  : !farLimit.State();
+}
+
+static inline bool estopEngaged() {
+    return LIMIT_ACTIVE_HIGH ? estopInput.State() : !estopInput.State();
+}
 // ── Command enum (mirrors Teknic reference shared.h) ──────────────────────
 typedef enum {
     CCMD_NONE       = 0,
@@ -168,8 +192,9 @@ CLIENT_INFC regs;  // the one and only shared register block
 
 enum MotionState {
     MS_IDLE,
-    MS_RUN_POSITIVE,
-    MS_RUN_NEGATIVE,
+    MS_HOMING,        // moving toward homeLimit, waiting for it to trigger
+    MS_SCANNING,      // slow sweep from home toward farLimit
+    MS_RETURNING,     // slow return from far back to homeLimit
     MS_STOPPED,
     MS_DISABLED
 };
@@ -227,8 +252,6 @@ void setup() {
     // Auto-start sequence 1 so the motor moves without waiting for the Pi.
     // If you see motion here but the Pi can't stop it, it's a comms problem.
     // If you don't see motion here, it's a motor/driver problem.
-    setMsg("BOOT OK - seq1 auto-start");
-    startSequence1();
 
     // Optional hardware-interrupt panic button on DI-6.
     // Uncomment ONE of the lines below depending on which ClearCore
@@ -239,6 +262,7 @@ void setup() {
 
 void loop() {
     // Arduino Ethernet wrapper refreshes LwIP internally on each call
+    serviceEstop();
     serviceModbus();         // the "panel stop" path
     serviceMotion();         // back-and-forth state machine
     updateStatusRegisters(); // refresh what the Pi will read next poll
@@ -255,6 +279,11 @@ void setupMotor() {
     delay(100);
     regs.state = CST_ENABLED;
     Serial.println("[MOTOR] M-0 enabled, step-and-dir");
+    // Limit switch inputs
+    homeLimit.Mode(Connector::INPUT_DIGITAL);
+    farLimit.Mode(Connector::INPUT_DIGITAL);
+    estopInput.Mode(Connector::INPUT_DIGITAL);
+    Serial.println("[MOTOR] limit switches on IO-2 (home) and IO-3 (far) and e-stop on IO-1");
 }
 
 void setupEthernet() {
@@ -436,14 +465,22 @@ void sendModbusException(uint8_t *mbapHdr, uint8_t fc, uint8_t exCode) {
 
 // ── Command dispatch ──────────────────────────────────────────────────────
 void handleCommand(uint16_t cmd) {
-    sprintf(dbg, "[CMD] %u", cmd);
+    sprintf(dbg, "[CMD] entry cmd=%u CCMD_RUN_1=%u", cmd, (unsigned)CCMD_RUN_1);
     Serial.println(dbg);
+
+    if (estopEngaged() && cmd != CCMD_STOP && cmd != CCMD_DISAB_MTRS) {
+        setMsg("CMD BLOCKED - E-STOP ENGAGED");
+        regs.cmd = CCMD_NACK;
+        return;
+    }
 
     switch (cmd) {
     case CCMD_NONE:
-        return;   // no-op, don't overwrite cmd
+        Serial.println("[CMD] -> NONE branch");
+        return;
 
     case CCMD_ENAB_MTRS:
+        Serial.println("[CMD] -> ENAB branch");
         motor.EnableRequest(true);
         regs.state = CST_ENABLED;
         setMsg("MOTORS ENABLED");
@@ -485,30 +522,59 @@ void handleCommand(uint16_t cmd) {
         break;
 
     case CCMD_RUN_1:
+        Serial.println("[CMD] -> RUN_1 branch, calling startSequence1()");
         startSequence1();
+        Serial.println("[CMD] -> returned from startSequence1()");
         break;
 
     default:
-        sprintf(dbg, "[CMD] unknown %u", cmd);
+        sprintf(dbg, "[CMD] -> DEFAULT branch, unknown %u", cmd);
         Serial.println(dbg);
         regs.cmd = CCMD_NACK;
         return;
     }
 
-    // Clear the command latch so stale values don't re-fire on the next poll
+    Serial.println("[CMD] exit, clearing latch");
     regs.cmd = CCMD_NONE;
 }
 
-// ── Sequence 1: back-and-forth test ───────────────────────────────────────
+// ── Sequence 1: home → scan → return ──────────────────────────────────────
 void startSequence1() {
-    motor.VelMax(TEST_VEL_SPS);
-    motor.AccelMax(TEST_ACCEL_SPSPS);
+    motor.VelMax(SCAN_VEL_SPS);
+    motor.AccelMax(SCAN_ACCEL_SPSPS);
     motor.EnableRequest(true);
-    motionState = MS_RUN_POSITIVE;
+    
+    Serial.println("[SEQ1] >>> startSequence1() called");
+
+    sprintf(dbg, "[SEQ1] limit reads: home=%d far=%d",
+            homeLimitHit(), farLimitHit());
+    Serial.println(dbg);
+
+    Serial.println("[SEQ1] setting VelMax");
+    motor.VelMax(SCAN_VEL_SPS);
+    Serial.println("[SEQ1] setting AccelMax");
+    motor.AccelMax(SCAN_ACCEL_SPSPS);
+    Serial.println("[SEQ1] EnableRequest(true)");
+    motor.EnableRequest(true);
+    
+    if (motionState == MS_DISABLED) {
+        delay(2000);
+    }
+    if (homeLimitHit()) {
+        Serial.println("[SEQ1] branch: already home -> scanning");
+        motionState = MS_SCANNING;
+        regs.state  = CST_RUNNING;
+        motor.Move(MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+        setMsg("SEQ1: already home, scanning");
+        return;
+    }
+
+    Serial.println("[SEQ1] branch: homing");
+    motionState = MS_HOMING;
     regs.state  = CST_RUNNING;
-    motor.Move(TEST_STROKE_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
-    setMsg("SEQ1 RUNNING");
-    Serial.println("[SEQ1] started");
+    motor.Move(-MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+    setMsg("SEQ1: homing");
+    Serial.println("[SEQ1] <<< startSequence1() done, motionState=MS_HOMING");
 }
 
 // ── Motion state machine ──────────────────────────────────────────────────
@@ -524,17 +590,64 @@ void serviceMotion() {
         Serial.println("[ISR] panic button handled");
     }
 
-    if (motionState != MS_RUN_POSITIVE && motionState != MS_RUN_NEGATIVE) {
-        return;
-    }
-    if (!motor.StepsComplete()) return;
+    switch (motionState) {
 
-    if (motionState == MS_RUN_POSITIVE) {
-        motionState = MS_RUN_NEGATIVE;
-        motor.Move(-TEST_STROKE_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
-    } else {
-        motionState = MS_RUN_POSITIVE;
-        motor.Move(TEST_STROKE_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+    case MS_HOMING:
+        // Drive toward home switch; stop the instant it trips.
+        if (homeLimitHit()) {
+            motor.MoveStopAbrupt();
+            // Zero our position reference here so cur_posn means something.
+            // (PositionRefSet exists on current ClearCore lib; if your
+            // version chokes on it, comment this out — sequencing still works.)
+            motor.PositionRefSet(0);
+            setMsg("HOMED - starting scan");
+            Serial.println("[SEQ1] home limit hit -> scanning");
+            motionState = MS_SCANNING;
+            motor.Move(MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+        } else if (motor.StepsComplete()) {
+            // Ran out of travel without hitting the switch — bail out.
+            setMsg("HOME FAIL - no limit hit");
+            Serial.println("[SEQ1] home FAIL");
+            motionState = MS_STOPPED;
+            regs.state  = CST_FAULT;
+        }
+        break;
+
+    case MS_SCANNING:
+        // Slow sweep toward the far switch.
+        if (farLimitHit()) {
+            motor.MoveStopAbrupt();
+            setMsg("FAR LIMIT - returning");
+            Serial.println("[SEQ1] far limit hit -> returning");
+            motionState = MS_RETURNING;
+            motor.Move(-MAX_TRAVEL_STEPS, StepGenerator::MOVE_TARGET_ABSOLUTE);
+        } else if (motor.StepsComplete()) {
+            setMsg("SCAN FAIL - no far limit");
+            Serial.println("[SEQ1] scan FAIL");
+            motionState = MS_STOPPED;
+            regs.state  = CST_FAULT;
+        }
+        break;
+
+    case MS_RETURNING:
+        // Slow return back to home, then park.
+        if (homeLimitHit()) {
+            motor.MoveStopAbrupt();
+            motor.PositionRefSet(0);
+            setMsg("SCAN COMPLETE - parked at home");
+            Serial.println("[SEQ1] complete, parked at home");
+            motionState = MS_STOPPED;
+            regs.state  = CST_STOPPED;
+        } else if (motor.StepsComplete()) {
+            setMsg("RETURN FAIL - no home limit");
+            Serial.println("[SEQ1] return FAIL");
+            motionState = MS_STOPPED;
+            regs.state  = CST_FAULT;
+        }
+        break;
+
+    default:
+        break;   // MS_IDLE / MS_STOPPED / MS_DISABLED — nothing to service
     }
 }
 
@@ -543,19 +656,18 @@ void updateStatusRegisters() {
     CCMTR_STATUS s;
     s.b.drvs_enabled = (motionState != MS_DISABLED) ? 1 : 0;
     s.b.moving       = !motor.StepsComplete() ? 1 : 0;
-    s.b.scanning     = (motionState == MS_RUN_POSITIVE ||
-                        motionState == MS_RUN_NEGATIVE) ? 1 : 0;
+    s.b.scanning     = (motionState == MS_HOMING ||
+                        motionState == MS_SCANNING ||
+                        motionState == MS_RETURNING) ? 1 : 0;
     s.b.fault        = (regs.state == CST_FAULT) ? 1 : 0;
-    s.b.estop        = 0;
+    s.b.estop = estopEngaged() ? 1 : 0;
     s.b.homed        = 0;
     s.b.hlfb         = 0;
     regs.status = s;
 
     // Report the active target as "current position" — good enough for the
     // comms test; watch this flip sign in the Pi log each back-and-forth cycle
-    regs.cur_posn = (motionState == MS_RUN_POSITIVE) ?  TEST_STROKE_STEPS
-                  : (motionState == MS_RUN_NEGATIVE) ? -TEST_STROKE_STEPS
-                  : 0;
+    regs.cur_posn = motor.PositionRefCommanded();
 }
 
 // ── msg buffer helper ─────────────────────────────────────────────────────
@@ -573,4 +685,25 @@ void setMsg(const char *text) {
 // Just set a flag; serviceMotion() does the real work next loop iteration.
 void panicButtonISR() {
     stopRequested = true;
+}
+
+void serviceEstop() {
+    static bool prevEngaged = false;
+    bool engaged = estopEngaged();
+
+    if (engaged && !prevEngaged) {
+        // Rising edge — just got pressed
+        motor.MoveStopAbrupt();
+        motor.EnableRequest(false);
+        motionState = MS_DISABLED;
+        regs.state  = CST_FAULT;
+        setMsg("E-STOP ENGAGED");
+        Serial.println("[ESTOP] engaged");
+    } else if (!engaged && prevEngaged) {
+        // Released — don't auto-enable, operator must re-arm from UI
+        setMsg("E-STOP CLEARED - press ENABLE to rearm");
+        Serial.println("[ESTOP] released");
+        regs.state = CST_IDLE;
+    }
+    prevEngaged = engaged;
 }

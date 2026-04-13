@@ -7,6 +7,12 @@ Requires: PyQt6, pyvistaqt, pyvista, numpy
 import sys
 import queue
 import numpy as np
+import os
+# Force Qt to use the X11 (xcb) platform plugin instead of Wayland.
+# VTK's rendering code talks directly to X11 and gets BadWindow errors
+# when Qt is using the wayland backend on Raspberry Pi OS. xcb works
+# correctly on both X11 and Wayland sessions (via XWayland).
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
@@ -311,6 +317,7 @@ STATUS_READY    = 1 << 0   # drvs_enabled
 STATUS_MOVING   = 1 << 1
 STATUS_HOMED    = 1 << 2
 STATUS_FAULT    = 1 << 3
+STATUS_ESTOP    = 1 << 4
 STATUS_SCANNING = 1 << 5
 STATUS_HLFB     = 1 << 6
 
@@ -523,6 +530,7 @@ class ClearCoreModbus(QThread):
                 "moving":       bool(status_word & STATUS_MOVING),
                 "homed":        bool(status_word & STATUS_HOMED),
                 "fault":        bool(status_word & STATUS_FAULT),
+                "estop":        bool(status_word & STATUS_ESTOP),
                 "scanning":     bool(status_word & STATUS_SCANNING),
                 "hlfb":         bool(status_word & STATUS_HLFB),
                 "cur_posn":     cur_posn,
@@ -618,7 +626,6 @@ class ScanToMillUI(QMainWindow):
         self._scan_running = False
         self._point_count = 0
         self._build_ui()
-        self._init_viewport()
         self._start_clock()
         self._init_modbus()
 
@@ -647,16 +654,54 @@ class ScanToMillUI(QMainWindow):
     def _on_modbus_status(self, status: dict):
         # Log only on change to avoid flooding the console
         prev = self._modbus_last_status
-        flag_keys = ("ready", "moving", "homed", "fault", "scanning")
+        flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
         if changed:
             flags = " ".join(
                 k.upper() for k in flag_keys if status.get(k)
             ) or "—"
-            self._log(f"[MODBUS] STATUS: {flags}  pos={status['cur_posn']}")
+            self._log(f"[MODBUS] STATUS: {flags}  pos={status.get('cur_posn', '?')}")
+
         if status.get("fault") and not prev.get("fault"):
-            self._log(f"[MODBUS] !! FAULT code {status['fault_code']}")
+            self._log("[MODBUS] !! FAULT latched")
+
+        # E-stop edge handling
+        estop_now = status.get("estop", False)
+        if estop_now and not self._estop_active:
+            self._estop_active = True
+            self._on_estop_engaged()
+        elif not estop_now and self._estop_active:
+            self._estop_active = False
+            self._on_estop_cleared()
+
         self._modbus_last_status = status
+
+    def _on_estop_engaged(self):
+        self._log("[SYS] !! EMERGENCY STOP ENGAGED !!")
+        # Force geometry in case resizeEvent hasn't sized it yet
+        w = int(self.width() * 0.6)
+        h = 120
+        x = (self.width() - w) // 2
+        y = (self.height() - h) // 2
+        self.estop_banner.setGeometry(x, y, w, h)
+        self.estop_banner.show()
+        self.estop_banner.raise_()
+        # Also halt any local scan worker
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.stop()
+        self._reset_scan_ui()
+        self.progress_bar.setFormat("%p%  —  E-STOP")
+        self.lbl_stage.setText("E-STOP")
+        self.btn_start.setEnabled(False)
+
+    def _on_estop_cleared(self):
+        self._log("[SYS] E-stop released. System disarmed — press START to resume.")
+        self.estop_banner.hide()
+        self.lbl_stage.setText("IDLE")
+        self.progress_bar.setFormat("%p%  —  IDLE")
+        # Re-enable the drive so the next CCMD_RUN_1 actually moves something
+        self._modbus.send_command(CCMD_ENAB_MTRS)
+        self.btn_start.setEnabled(True)
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -675,6 +720,7 @@ class ScanToMillUI(QMainWindow):
         root.addLayout(body, stretch=1)
 
         root.addWidget(self._make_bottom_panel())
+        self._make_estop_banner()   # <-- add this line
 
     def _make_header(self):
         w = QWidget()
@@ -815,6 +861,7 @@ class ScanToMillUI(QMainWindow):
 
     # ── Viewport ──────────────────────────────────────────────────────────────
     def _init_viewport(self):
+
         vtk_lay = QVBoxLayout(self.vtk_frame)
         vtk_lay.setContentsMargins(0, 0, 0, 0)
 
@@ -830,6 +877,8 @@ class ScanToMillUI(QMainWindow):
         self._log("[VIZ] Viewport ready — awaiting camera stream")
 
     def _set_view_mode(self, mode):
+        if not hasattr(self, "plotter"):
+            return  # Viewport not initialized yet
         self._view_mode = mode
         if mode == "cloud":
             self.lbl_render_mode.setText("MODE: POINT CLOUD")
@@ -838,19 +887,27 @@ class ScanToMillUI(QMainWindow):
                 self._cloud, scalars="depth", cmap="cool",
                 point_size=3, render_points_as_spheres=True,
                 name="pointcloud", show_scalar_bar=False
-            )
+            )    
         else:
             self.lbl_render_mode.setText("MODE: MESH")
             self.plotter.remove_actor("pointcloud")
+            if self._cloud is None or self._cloud.n_points < 4:
+                # Need at least a few points for surface reconstruction.
+                self._log("[VIZ] Mesh view: not enough points yet.")
+                self.plotter.render()
+                return
             surf = self._cloud.reconstruct_surface(nbr_sz=10)
             self.plotter.add_mesh(
                 surf, color="#2a5a7a", show_edges=False,
                 opacity=1.0, name="mesh_actor",
-                pbr=False, interpolate_before_map=False
-)
+                pbr=False, interpolate_before_map=False,
+            )
         self.plotter.render()
 
+
     def _reset_camera(self):
+        if not hasattr(self, "plotter"):
+            return
         self.plotter.camera_position = "iso"
         self.plotter.render()
 
@@ -860,6 +917,8 @@ class ScanToMillUI(QMainWindow):
         TODO: call this from the camera capture thread with a real
         pv.PolyData built from D405 depth frames.
         """
+        if not hasattr(self, "plotter"):
+            return
         if cloud is None or cloud.n_points == 0:
             return
         self._cloud = cloud
@@ -977,15 +1036,60 @@ class ScanToMillUI(QMainWindow):
             self._modbus.send_command(CCMD_DISAB_MTRS)
             self._modbus.stop()
             self._modbus.wait(2000)
-        self.plotter.close()
+        if hasattr(self, "plotter"):
+            self.plotter.close()
         event.accept()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not hasattr(self, "_viewport_initialized"):
+            self._viewport_initialized = True
+            QTimer.singleShot(0, self._init_viewport_safe)
+
+    def _init_viewport_safe(self):
+        try:
+            self._init_viewport()
+            self._log("[VIZ] _init_viewport completed successfully")
+        except Exception as e:
+            self._log(f"[VIZ] _init_viewport FAILED: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _make_estop_banner(self):
+        self.estop_banner = QLabel("⚠  EMERGENCY STOP ENGAGED  ⚠", self)
+        self.estop_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.estop_banner.setStyleSheet("""
+            QLabel {
+                background-color: #cc2d2d;
+                color: #ffffff;
+                font-size: 28px;
+                font-weight: bold;
+                letter-spacing: 4px;
+                border: 4px solid #ff5555;
+                padding: 24px;
+            }
+        """)
+        self.estop_banner.hide()
+        self.estop_banner.raise_()
+        self._estop_active = False
+        
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Keep the banner centered & sized to ~60% width whenever window resizes
+        if hasattr(self, "estop_banner"):
+            w = int(self.width() * 0.6)
+            h = 120
+            x = (self.width() - w) // 2
+            y = (self.height() - h) // 2
+            self.estop_banner.setGeometry(x, y, w, h)
+            
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
     pv.global_theme.multi_samples = 1        # <-- add this
     pv.global_theme.smooth_shading = False
+    pv.global_theme.allow_empty_mesh = True   # placeholder cloud has 0 points
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLE)
     window = ScanToMillUI()
