@@ -575,46 +575,6 @@ class ClearCoreModbus(QThread):
         except Exception as e:
             self.error.emit(f"[MODBUS] msg read err: {e}")
 
-
-# ── Worker thread for fake scan progress ─────────────────────────────────────
-class ScanWorker(QThread):
-    progress = pyqtSignal(int)
-    point_count = pyqtSignal(int)
-    log_message = pyqtSignal(str)
-    finished = pyqtSignal()
-
-    def __init__(self):
-        super().__init__()
-        self._paused = False
-        self._stopped = False
-        
-    def stop(self): self._stopped = True; self._paused = False
-
-    def run(self):
-        steps = 100
-        self.log_message.emit("[SCAN] Initializing depth sensor...")
-        self.msleep(400)
-        self.log_message.emit("[SCAN] Stream started at 640x480 @ 30fps")
-        for i in range(1, steps + 1):
-            while self._paused:
-                self.msleep(100)
-            if self._stopped:
-                self.log_message.emit("[SCAN] Scan aborted by user.")
-                return
-            self.msleep(80)
-            self.progress.emit(i)
-            self.point_count.emit(i * 47)
-            if i == 25:
-                self.log_message.emit("[SCAN] 25% — front face captured")
-            elif i == 50:
-                self.log_message.emit("[SCAN] 50% — rotating to side profile")
-            elif i == 75:
-                self.log_message.emit("[SCAN] 75% — top surface acquired")
-            elif i == 100:
-                self.log_message.emit("[SCAN] Complete — 4700 points captured")
-        self.finished.emit()
-
-
 # ── Main Window ───────────────────────────────────────────────────────────────
 class ScanToMillUI(QMainWindow):
     def __init__(self):
@@ -644,7 +604,24 @@ class ScanToMillUI(QMainWindow):
         self._log(f"[MODBUS] Connecting to ClearCore at "
                   f"{MODBUS_DEFAULT_HOST}:{MODBUS_DEFAULT_TCP_PORT}...")
         self._modbus.start()
-
+        # Drive progress bar from real motion state
+        if self._scan_running:
+            if status.get("scanning"):
+                # Still moving. Can't know % without travel distance,
+                # so show indeterminate-style progress.
+                pass
+            elif prev.get("scanning") and not status.get("scanning"):
+                # Was scanning, now stopped — scan done
+                self._on_scan_done_real()
+                
+   def _on_scan_done_real(self):
+        self._reset_scan_ui()
+        self.progress_bar.setFormat("COMPLETE")
+        self.progress_bar.setValue(100)
+        self.lbl_stage.setText("COMPLETE")
+        self.btn_export.setEnabled(True)
+        self._log("[SYS] Scan complete.")
+       
     def _on_modbus_connected(self, ok: bool):
         if ok:
             self._log("[MODBUS] ClearCore link ESTABLISHED.")
@@ -687,8 +664,6 @@ class ScanToMillUI(QMainWindow):
         self.estop_banner.show()
         self.estop_banner.raise_()
         # Also halt any local scan worker
-        if self._scan_worker and self._scan_worker.isRunning():
-            self._scan_worker.stop()
         self._reset_scan_ui()
         self.progress_bar.setFormat("%p%  —  E-STOP")
         self.lbl_stage.setText("E-STOP")
@@ -947,20 +922,15 @@ class ScanToMillUI(QMainWindow):
         self._scan_timer.timeout.connect(self._tick_elapsed)
         self._scan_timer.start(1000)
 
-        self._scan_worker = ScanWorker()
-        self._scan_worker.progress.connect(self._on_progress)
-        self._scan_worker.point_count.connect(self._on_points)
-        self._scan_worker.log_message.connect(self._log)
-        self._scan_worker.finished.connect(self._on_scan_done)
-        self._scan_worker.start()
+        # Tell the ClearCore to begin its scan motion profile
+        self._modbus.send_command(CCMD_RUN_1)
+        self._log("[SYS] Scan started - commanded CCMD_RUN_1")
 
         # Tell the ClearCore to begin its scan motion profile
         self._modbus.send_command(CCMD_RUN_1)
 
 
     def _on_stop(self):
-        if self._scan_worker:
-            self._scan_worker.stop()
         self._modbus.send_command(CCMD_STOP)
         self._reset_scan_ui()
         self.progress_bar.setValue(0)
@@ -1031,9 +1001,6 @@ class ScanToMillUI(QMainWindow):
         self.lbl_clock.setText(datetime.now().strftime("%H:%M:%S"))
 
     def closeEvent(self, event):
-        if self._scan_worker and self._scan_worker.isRunning():
-            self._scan_worker.stop()
-            self._scan_worker.wait()
         if hasattr(self, "_modbus") and self._modbus.isRunning():
             # Park the ClearCore before tearing down the link
             self._modbus.send_command(CCMD_STOP)

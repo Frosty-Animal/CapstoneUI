@@ -37,3 +37,45 @@ Modify: 2026-04-10 04:29:19.811501444 -0500
 Change: 2026-04-10 04:29:19.811501444 -0500
  Birth: 2026-04-10 04:29:19.811501444 -0500
 
+[17:14:55]  [SYS] Scan-to-Mill UI initialized.
+[17:14:55]  [SYS] Waiting for hardware connection...
+[17:14:55]  [MODBUS] Connecting to ClearCore at 192.168.1.20:502...
+[17:14:55]  [VIZ] Viewport ready — awaiting camera stream
+[17:14:55]  [VIZ] _init_viewport completed successfully
+[17:14:55]  [MODBUS] ClearCore link ESTABLISHED.
+[17:14:55]  [MODBUS] Link up to ClearCore at 192.168.1.20:502, slave id 1
+[17:14:55]  [MODBUS] STATUS: READY  pos=0
+[17:14:55]  [CC] PI CONNECTED
+[17:15:13]  [SCAN] Initializing depth sensor...
+[17:15:13]  [SCAN] Stream started at 640x480 @ 30fps
+[17:15:15]  [SCAN] 25% — front face captured
+[17:15:17]  [SCAN] 50% — rotating to side profile
+[17:15:19]  [SCAN] 75% — top surface acquired
+[17:15:21]  [MODBUS] Write exception: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+[17:15:21]  [MODBUS] STATUS: READY MOVING SCANNING  pos=-190
+[17:15:21]  [CC] SEQ1: homing
+[17:15:21]  [SCAN] Complete — 4700 points captured
+[17:15:21]  [SYS] Post-processing options unlocked.
+[17:15:30]  [CC] HOMED - starting scan
+[17:15:36]  [MODBUS] STATUS: FAULT ESTOP  pos=11747
+[17:15:36]  [MODBUS] !! FAULT latched
+[17:15:36]  [SYS] !! EMERGENCY STOP ENGAGED !!
+[17:15:36]  [CC] E-STOP ENGAGED
+[17:15:40]  [MODBUS] STATUS: READY  pos=11747
+[17:15:40]  [SYS] E-stop released. System disarmed — press START to resume.
+[17:15:40]  [CC] E-STOP CLEARED - press ENABLE to rearm
+[17:15:40]  [MODBUS] → CMD 1
+[17:15:40]  [CC] MOTORS ENABLED
+[17:15:42]  [SCAN] Initializing depth sensor...
+[17:15:42]  [SCAN] Stream started at 640x480 @ 30fps
+[17:15:44]  [SCAN] 25% — front face captured
+[17:15:46]  [SCAN] 50% — rotating to side profile
+[17:15:48]  [SCAN] 75% — top surface acquired
+[17:15:50]  [MODBUS] Write exception: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+[17:15:50]  [MODBUS] STATUS: READY FAULT  pos=0
+[17:15:50]  [MODBUS] !! FAULT latched
+[17:15:50]  [CC] HOME FAIL - no limit hit
+[17:15:50]  [SCAN] Complete — 4700 points captured
+[17:15:50]  [SYS] Post-processing options unlocked.
+
+[17:10:41]  [MODBUS] Write exception: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
