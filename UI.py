@@ -699,8 +699,12 @@ class ScanToMillUI(QMainWindow):
         self.estop_banner.hide()
         self.lbl_stage.setText("IDLE")
         self.progress_bar.setFormat("%p%  —  IDLE")
-        # Re-enable the drive so the next CCMD_RUN_1 actually moves something
-        self._modbus.send_command(CCMD_ENAB_MTRS)
+        # Delay the enable command by 500ms (2-3 poll cycles) so the ClearCore's
+        # serviceEstop() loop has time to register the switch as cleared before
+        # handleCommand() runs. Without this, the command arrives while the ClearCore
+        # still sees estopEngaged()==true and silently NACKs it, leaving motionState
+        # stuck at MS_DISABLED.
+        QTimer.singleShot(500, lambda: self._modbus.send_command(CCMD_ENAB_MTRS))
         self.btn_start.setEnabled(True)
 
     # ── Layout ────────────────────────────────────────────────────────────────
