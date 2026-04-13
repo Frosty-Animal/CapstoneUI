@@ -928,6 +928,10 @@ class ScanToMillUI(QMainWindow):
     # ── Scan Actions ──────────────────────────────────────────────────────────
     def _on_start(self):
         self._scan_running = True
+        self.progress_bar.setValue(0)
+        self.lbl_elapsed.setText("00:00")
+        self.lbl_remaining.setText("—")
+        self.lbl_pts_stat.setText("—")
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
