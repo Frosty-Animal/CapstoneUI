@@ -953,7 +953,7 @@ class ScanToMillUI(QMainWindow):
         self._scan_timer.timeout.connect(self._tick_elapsed)
         self._scan_timer.start(1000)
 
-        # Progress bar fill: 60 seconds from 0 to 100%. The timer fires
+        # Progress bar fill: 62 seconds from 0 to 100%. The timer fires
         # 10x/sec so the bar animation is smooth rather than steppy.
         self._scan_progress_pct = 0.0
         self._progress_timer = QTimer()
@@ -961,7 +961,7 @@ class ScanToMillUI(QMainWindow):
         # Don't start yet — we wait until the SCANNING bit confirms we
         # actually began. Starts from _on_modbus_status edge.
         # Tunable: how many seconds a full scan takes.
-        self.SCAN_DURATION_SEC = 60.0
+        self.SCAN_DURATION_SEC = 62.0
         
         # Tell the ClearCore to begin its scan motion profile
         self._modbus.send_command(CCMD_RUN_1)
