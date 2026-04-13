@@ -678,7 +678,12 @@ class ScanToMillUI(QMainWindow):
 
     def _on_estop_engaged(self):
         self._log("[SYS] !! EMERGENCY STOP ENGAGED !!")
-        # Show banner
+        # Force geometry in case resizeEvent hasn't sized it yet
+        w = int(self.width() * 0.6)
+        h = 120
+        x = (self.width() - w) // 2
+        y = (self.height() - h) // 2
+        self.estop_banner.setGeometry(x, y, w, h)
         self.estop_banner.show()
         self.estop_banner.raise_()
         # Also halt any local scan worker
@@ -687,7 +692,6 @@ class ScanToMillUI(QMainWindow):
         self._reset_scan_ui()
         self.progress_bar.setFormat("%p%  —  E-STOP")
         self.lbl_stage.setText("E-STOP")
-        # Disable the start button until cleared
         self.btn_start.setEnabled(False)
 
     def _on_estop_cleared(self):
@@ -695,6 +699,8 @@ class ScanToMillUI(QMainWindow):
         self.estop_banner.hide()
         self.lbl_stage.setText("IDLE")
         self.progress_bar.setFormat("%p%  —  IDLE")
+        # Re-enable the drive so the next CCMD_RUN_1 actually moves something
+        self._modbus.send_command(CCMD_ENAB_MTRS)
         self.btn_start.setEnabled(True)
 
     # ── Layout ────────────────────────────────────────────────────────────────
