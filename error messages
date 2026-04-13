@@ -25,3 +25,15 @@ Traceback (most recent call last):
     self._log(f"[MODBUS] !! FAULT code {status['fault_code']}")
                                         ~~~~~~^^^^^^^^^^^^^^
 KeyError: 
+
+
+(venv) cnc-machine-2@CNC-1:~/CapstoneUI $ stat ~/CapstoneUI/UI.py
+  File: /home/cnc-machine-2/CapstoneUI/UI.py
+  Size: 38010     	Blocks: 80         IO Block: 4096   regular file
+Device: 179,2	Inode: 663165      Links: 1
+Access: (0664/-rw-rw-r--)  Uid: ( 1000/cnc-machine-2)   Gid: ( 1000/cnc-machine-2)
+Access: 2026-04-10 04:29:19.811501444 -0500
+Modify: 2026-04-10 04:29:19.811501444 -0500
+Change: 2026-04-10 04:29:19.811501444 -0500
+ Birth: 2026-04-10 04:29:19.811501444 -0500
+
