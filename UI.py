@@ -1049,7 +1049,7 @@ class ScanToMillUI(QMainWindow):
             import traceback
             traceback.print_exc()
 
-def _make_estop_banner(self):
+    def _make_estop_banner(self):
         self.estop_banner = QLabel("⚠  EMERGENCY STOP ENGAGED  ⚠", self)
         self.estop_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.estop_banner.setStyleSheet("""
