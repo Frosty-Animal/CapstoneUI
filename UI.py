@@ -656,9 +656,7 @@ class ScanToMillUI(QMainWindow):
         flag_keys = ("ready", "moving", "homed", "fault", "estop", "scanning")
         changed = [k for k in flag_keys if prev.get(k) != status.get(k)]
         if status.get("fault") and not prev.get("fault"):
-            code = status.get("fault_code", "n/a")
-            self._log(f"[MODBUS] !! FAULT (code {code})")
-            estop_now = status.get("estop", False)
+            self._log("[MODBUS] !! FAULT latched")
         if estop_now and not self._estop_active:
             self._estop_active = True
             self._on_estop_engaged()
