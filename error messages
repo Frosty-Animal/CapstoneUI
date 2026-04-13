@@ -1,3 +1,27 @@
   File "/home/cnc-machine-2/CapstoneUI/UI.py", line 16
     from pymodbus.client import ModbusTcpClient
 SyntaxError: expected 'except' or 'finally' block
+
+
+(venv) cnc-machine-2@CNC-1:~/CapstoneUI $ grep "fault" UI.py
+# Give both sides a static IP on the same /24. Default here assumes
+# Default TCP settings — override in ScanToMillUI if needed.
+                "fault":        bool(status_word & STATUS_FAULT),
+        flag_keys = ("ready", "moving", "homed", "fault", "scanning")
+        if status.get("fault") and not prev.get("fault"):
+            self._log(f"[MODBUS] !! FAULT code {status['fault_code']}")
+(venv) cnc-machine-2@CNC-1:~/CapstoneUI $ git pull
+remote: Enumerating objects: 5, done.
+remote: Counting objects: 100% (5/5), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 3 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+Unpacking objects: 100% (3/3), 1.01 KiB | 1.01 MiB/s, done.
+From https://github.com/Frosty-Animal/CapstoneUI
+   e085e87..b925278  main       -> origin/main
+Already up to date.
+(venv) cnc-machine-2@CNC-1:~/CapstoneUI $ python3 UI.py
+Traceback (most recent call last):
+  File "/home/cnc-machine-2/CapstoneUI/UI.py", line 663, in _on_modbus_status
+    self._log(f"[MODBUS] !! FAULT code {status['fault_code']}")
+                                        ~~~~~~^^^^^^^^^^^^^^
+KeyError: 
