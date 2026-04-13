@@ -1066,7 +1066,7 @@ class ScanToMillUI(QMainWindow):
         self.estop_banner.hide()
         self.estop_banner.raise_()
         self._estop_active = False
-
+        
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # Keep the banner centered & sized to ~60% width whenever window resizes
