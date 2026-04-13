@@ -482,6 +482,11 @@ void handleCommand(uint16_t cmd) {
     case CCMD_ENAB_MTRS:
         Serial.println("[CMD] -> ENAB branch");
         motor.EnableRequest(true);
+        // If we're coming out of a disabled/estop state, transition back to idle
+        // so the state machine and status register reflect that the drive is live.
+        if (motionState == MS_DISABLED) {
+            motionState = MS_IDLE;
+        }
         regs.state = CST_ENABLED;
         setMsg("MOTORS ENABLED");
         break;
@@ -543,7 +548,10 @@ void startSequence1() {
     motor.VelMax(SCAN_VEL_SPS);
     motor.AccelMax(SCAN_ACCEL_SPSPS);
     motor.EnableRequest(true);
-    
+    if (motionState == MS_DISABLED) {
+        motionState = MS_IDLE;
+        delay(2000);
+    }
     Serial.println("[SEQ1] >>> startSequence1() called");
 
     sprintf(dbg, "[SEQ1] limit reads: home=%d far=%d",
