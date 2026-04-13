@@ -613,15 +613,15 @@ class ScanToMillUI(QMainWindow):
             elif prev.get("scanning") and not status.get("scanning"):
                 # Was scanning, now stopped — scan done
                 self._on_scan_done_real()
-                
-   def _on_scan_done_real(self):
+
+    def _on_scan_done_real(self):
         self._reset_scan_ui()
         self.progress_bar.setFormat("COMPLETE")
         self.progress_bar.setValue(100)
         self.lbl_stage.setText("COMPLETE")
         self.btn_export.setEnabled(True)
         self._log("[SYS] Scan complete.")
-       
+
     def _on_modbus_connected(self, ok: bool):
         if ok:
             self._log("[MODBUS] ClearCore link ESTABLISHED.")
