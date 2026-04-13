@@ -50,6 +50,106 @@ of those things is broken.
 
 ---
 
+## Recent Progress (Session Log)
+
+This section captures work completed in each debugging/feature session so
+that progress isn't lost between sittings. Most recent at the top.
+
+### Session — April 13, 2026
+
+**Scan sequence with limit switches (ClearCore side).** The previous
+`CCMD_RUN_1` back-and-forth placeholder was replaced with a real three-phase
+scan motion: **home → scan → return**. The carriage now drives slowly toward
+a home limit switch, then sweeps across to a far limit switch, then returns
+to home and parks. Two limit switch inputs on `ConnectorIO2` (far) and
+`ConnectorIO3` (home) drive the state transitions. A new state machine
+(`MS_HOMING`, `MS_SCANNING`, `MS_RETURNING`, `MS_STOPPED`) in
+`serviceMotion()` handles the transitions; `motor.PositionRefSet(0)` is
+called when home is reached so `cur_posn` becomes meaningful.
+
+Limit-switch polarity was configurable via `LIMIT_ACTIVE_HIGH` — set to
+`true` to match the installed switches (active-high when pressed). Without
+this, the firmware thought both switches were always pressed and the whole
+sequence would complete in microseconds with no motor movement, which
+produced the spurious "SCAN COMPLETE" message immediately on Start. Fixed.
+
+**Emergency stop on `ConnectorIO1`.** Added `serviceEstop()`, called first
+from `loop()` so it takes priority over everything else. On engage, the
+drive is disabled (`EnableRequest(false)`), `motionState` → `MS_DISABLED`,
+and `regs.state` → `CST_FAULT`. On release, `motionState` is reset to
+`MS_STOPPED` and `regs.state` to `CST_IDLE`, but the drive is NOT
+auto-re-enabled — the operator must explicitly re-arm via START. A new
+`ESTOP` bit (bit 4) was exposed in the status bitfield so the Pi knows
+when e-stop is engaged without having to poll a separate register.
+
+A command-filter was added to the top of `handleCommand()`: while e-stop
+is engaged, all commands except `CCMD_STOP` and `CCMD_DISAB_MTRS` are
+rejected with `CCMD_NACK`.
+
+**Non-blocking rearm (the important one).** The initial e-stop
+implementation had a 2-second `delay()` in `startSequence1()` to let the
+ClearPath drive come up after an enable-edge. This blocked the main
+`loop()` long enough that `serviceModbus()` didn't service inbound writes
+in time, and the Pi's pymodbus client would time out with
+`No response received after 3 retries, CLOSING CONNECTION` — causing a
+~10-second gap between button press and motion on each Start Scan.
+
+Fix: added a new `MS_REARM_WAIT` state. `startSequence1()` now just
+issues an enable-cycle (`EnableRequest(false)` / 50ms / `EnableRequest(true)`),
+sets `motionState = MS_REARM_WAIT`, records the timestamp, and returns
+immediately. `serviceMotion()` handles the 2-second wait across subsequent
+`loop()` iterations, so Modbus polls keep flowing the entire time. Response
+time from button press to motor start is now ~2 seconds (the drive settle
+time) instead of ~10.
+
+**Operator interface — E-STOP banner.** Added a full-width red overlay
+label (`estop_banner`) that appears when the ClearCore's `ESTOP` status
+bit is set and hides when it clears. Uses edge detection in
+`_on_modbus_status()` so `_on_estop_engaged()` / `_on_estop_cleared()`
+fire exactly once per transition. Chose a persistent banner over a modal
+pop-up because modal dialogs block the log panel and need dismissal —
+a banner is industrial-HMI standard for annunciators.
+
+**Operator interface — removed fake ScanWorker.** The wireframe-era
+`ScanWorker` QThread was generating fake "25% front face captured" log
+lines and progress bar updates on an 8-second timer. It was also blocking
+the Qt event loop enough to cause Modbus write timeouts on Start Scan.
+Stripped it out. The progress/stage labels are now driven from real
+ClearCore status: the `SCANNING` bit is the authoritative "motion in
+progress" signal, and falling-edge on that bit (while not faulted/estopped)
+triggers `_on_scan_complete()`, which re-enables the Start button, sets
+the stage to COMPLETE, and unlocks the STL export button.
+
+**Fixed: Start button not re-enabling after scan completion.** Before the
+scan-complete edge detector was added, the UI had no way to know the motor
+had parked, so `btn_start` stayed disabled until the operator pressed
+STOP. The falling-edge detection on `SCANNING` fixed this — now Start
+re-enables automatically when the carriage returns home.
+
+**Miscellaneous bug fixes:**
+
+- `KeyError: 'fault_code'` crash in `_on_modbus_status()` — the code
+  referenced a key that was never populated in the status dict. Removed
+  the reference and switched to `.get()` with defaults throughout.
+- Boot-time auto-start of the back-and-forth sequence was removed.
+  Motion now only happens in response to `CCMD_RUN_1` from the Pi.
+- `_make_estop_banner()` and `resizeEvent()` were placed at module scope
+  instead of inside `ScanToMillUI` — fixed indentation.
+- Duplicate `estop` bit declaration in `CCMTR_STATUS` caused by re-editing
+  the struct — removed the duplicate.
+- git sync foot-gun on the Pi: edits made via the GitHub web UI must be
+  **committed** before `git pull` sees them on the Pi. A stale
+  `UI.py` on the Pi was producing the `fault_code` crash even after
+  "fixing" the file in the browser.
+
+**Outcome:** Start Scan now runs a clean home-scan-return cycle in ~60 s
+end-to-end (at `SCAN_VEL_SPS = 2000`). E-stop halts cleanly, the UI banner
+shows/hides on the correct edges, re-arming after e-stop works, and the
+Start button resets automatically when a scan completes. The system is in
+a usable demo state.
+
+---
+
 ## Hardware Bill of Materials
 
 | Component | Notes |
@@ -131,16 +231,16 @@ you see the boot sequence:
 [BOOT] Scan-to-Mill ClearCore Modbus TCP test
 [BOOT] CLIENT_INFC = 88 bytes = 44 regs, cmd@w6
 [MOTOR] M-0 enabled, step-and-dir
+[MOTOR] limit switches on IO-2 (far) and IO-3 (home) and e-stop on IO-1
 [NET] PHY link up
 [NET] IP = 192.168.1.20
 [NET] Modbus TCP listening on :502 unit 1
-[SEQ1] started
 ```
 
-If the motor is connected, it should immediately start moving back and forth
-between +5000 and −5000 steps. This auto-start is intentional — if you see
-motion before the Pi is even connected, you know the motor and motion logic
-are healthy independent of the comms layer.
+The motor stays still at boot now — motion only starts when the Pi sends
+`CCMD_RUN_1` (via the Start Scan button). If you want to verify motor
+hardware independently of the Pi, use `cc_modbus_test.py` on another
+machine with `run` to trigger a sequence manually.
 
 ### 5. Connect the cable and run the test
 
@@ -881,41 +981,44 @@ Intel RealSense D405 camera capture pipeline is not yet wired in.
 `_update_pointcloud_live()` is the hook point — it accepts a `pv.PolyData`
 and renders it. Plug your camera capture thread in there.
 
-### No real scan motion profile
+### No real scan motion profile (partially complete)
 
-The ClearCore sketch's `CCMD_RUN_1` runs a placeholder back-and-forth
-test, not the actual scan motion profile. Real scanning needs the camera
-to capture frames at known carriage positions, which means coordinated
-motion+capture instead of free-running motion. The `CCMD_MOVE` path
-already exists in the sketch and accepts acc/vel/target — you can drive
-discrete moves from the Pi side and capture between them.
+The ClearCore sketch's `CCMD_RUN_1` now runs a real home→scan→return cycle
+driven by limit switches on IO-2/IO-3 instead of the old back-and-forth
+placeholder. What's still missing is **coordinated motion+capture**: the
+camera needs to grab frames at known carriage positions during the scan
+sweep. The `CCMD_MOVE` path already accepts acc/vel/target if you want to
+drive discrete stop-and-capture moves from the Pi side instead of a
+continuous sweep.
 
-### No homing
+### Homing (complete)
 
-The ClearCore sketch doesn't implement homing. `CCMD_SET_ZERO` is a
-no-op stub. For a real scan you'll want either:
-
-- A homing routine that drives toward a hard stop or limit switch on
-  startup, then sets position to a known reference
-- Or absolute encoder feedback (ClearPath-SDSK supports this)
+Limit switches on IO-2 (far) and IO-3 (home) are now wired in. The
+`MS_HOMING` state drives toward the home switch and zeroes
+`PositionRefCommanded` when it trips, establishing a canonical origin
+for subsequent scans. `CCMD_SET_ZERO` is still a no-op but is no longer
+needed for the basic scan workflow.
 
 ### G-code export not yet implemented
 
 The Scan-to-Mill workflow ends with exporting a toolpath to the
 Genmitsu CNC. None of that exists in this codebase yet.
 
-### Hardware E-stop is software-only
+### E-stop — software path done, hardware cutoff still needed
 
-`CCMD_DISAB_MTRS` halts the motor and drops the enable line, but it
-runs in the main loop alongside everything else. A genuine hardware
-E-stop should use the panic-button hardware interrupt path on DI-6
-that's currently commented out in `setup()`. Wire a normally-open
-button between DI-6 and GND, uncomment the `attachInterrupt` line,
-and the ISR will fire regardless of what the main loop is doing.
+An e-stop button wired to `ConnectorIO1` is now polled every loop iteration
+by `serviceEstop()`. On press it halts the motor (`MoveStopAbrupt` +
+`EnableRequest(false)`), latches the `ESTOP` status bit, and drives a
+red banner on the Pi UI via the Modbus status channel. Release clears the
+banner and unlocks START for a manual re-arm. Command filter in
+`handleCommand()` rejects anything except STOP/DISABLE while engaged.
 
-For full safety compliance you also want a hardware contactor cutting
-the 24V drive power on the same button — never trust software alone
-for E-stop on a real machine.
+What's still missing for real safety compliance: a **hardware contactor**
+in series with the 24V drive supply, wired to the same physical button.
+Software e-stop is valid functional behavior but should never be the only
+thing between the operator and the motor. The `panicButtonISR()` hook on
+DI-6 is also still available as a second software path if you want
+interrupt-driven halting for cases where the main loop might be blocked.
 
 ### No authentication or encryption
 
