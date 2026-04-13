@@ -672,7 +672,7 @@ class ScanToMillUI(QMainWindow):
     def _on_estop_engaged(self):
         self._log("[SYS] !! EMERGENCY STOP ENGAGED !!")
         # Force geometry in case resizeEvent hasn't sized it yet
-        w = int(self.width() * 0.6)
+        w = int(self.width() * 0.65)
         h = 120
         x = (self.width() - w) // 2
         y = (self.height() - h) // 2
