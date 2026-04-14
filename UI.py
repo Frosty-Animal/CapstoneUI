@@ -15,6 +15,7 @@ import os
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 import pyvista as pv
 from pyvistaqt import QtInteractor
+from scanner.capture import RealSenseCapture
 
 try:
     from pymodbus.client import ModbusTcpClient
@@ -1217,31 +1218,60 @@ class CameraWorker(QThread):
     def set_emit_every(self, n: int):
         self._emit_every = max(1, int(n))
 
+    def capture(self):
+        """Expose the underlying RealSenseCapture for scan-path averaged
+        captures. Returns None if the pipeline isn't up.
+
+        IMPORTANT: the caller must not invoke get_live_polydata() on this
+        object — that would race the worker's own frame loop. Only use
+        capture_averaged_frames() / capture() from the scan orchestrator,
+        and only while the worker is paused (stop_stream()).
+        """
+        return self._cap if (self._cap and self._cap.is_running()) else None
     # ── Worker loop ───────────────────────────────────────────────────────────
     def run(self):
         if not _PYREALSENSE_AVAILABLE:
-            self.error.emit(
-                "[CAM] pyrealsense2 not installed — run: pip install pyrealsense2"
-            )
+            self.error.emit("[CAM] pyrealsense2 not installed")
             return
 
+        self._cap = RealSenseCapture(
+            width=self._width, height=self._height, fps=self._fps,
+        )
+
         while not self._stop_flag:
-            # Idle until the UI asks us to stream
             if not self._streaming:
+                if self._cap.is_running():
+                    self._cap.stop()
+                    self.connected.emit(False)
                 self.msleep(50)
                 continue
 
-            if not self._open_pipeline():
-                # Back off and retry — lets the user recover by replugging USB
-                self._streaming = False
-                self.msleep(500)
+            if not self._cap.is_running():
+                try:
+                    self._cap.start()
+                    self.connected.emit(True)
+                    self.log_message.emit("[CAM] D405 stream up")
+                except Exception as e:
+                    self.error.emit(f"[CAM] Open error: {e}")
+                    self._streaming = False
+                    self.msleep(500)
+                    continue
+
+            try:
+                cloud = self._cap.get_live_polydata(timeout_ms=1000)
+            except Exception as e:
+                self.error.emit(f"[CAM] Frame error: {e}")
+                self._cap.stop()
+                self.connected.emit(False)
                 continue
 
-            self._frame_loop()
-            self._close_pipeline()
+            self._frame_idx += 1
+            if cloud is not None and self._frame_idx % self._emit_every == 0:
+                self.frame_ready.emit(cloud)
 
-        # Final cleanup on thread exit
-        self._close_pipeline()
+        if self._cap.is_running():
+            self._cap.stop()
+            self.connected.emit(False)
         self.log_message.emit("[CAM] Worker stopped.")
 
     # ── Internal: pipeline lifecycle ─────────────────────────────────────────
