@@ -958,22 +958,6 @@ struct, and command dispatch. Uses the ClearCore Arduino wrapper API.
 These are the things this comms test does NOT do, in rough priority order
 of "what to tackle next."
 
-### UI is unusable on the 7" Pi touchscreen
-
-The current `UI.py` layout was designed for a desktop monitor (≥1280×800)
-and is squished into illegibility on the 800×480 official Pi touchscreen.
-A proper touchscreen UI needs:
-
-- Single-panel-at-a-time layout with tab navigation, not the current
-  3-column layout
-- Buttons sized for finger touch (minimum 44×44 px, ideally 60×60)
-- Larger fonts throughout
-- The 3D viewport probably as its own dedicated tab rather than a sidebar
-- Larger touch targets for E-stop and other safety-critical buttons
-
-For demo purposes, an external HDMI monitor at 1920×1080 works fine and
-buys time to do this redesign properly later.
-
 ### No real point cloud capture yet
 
 `UI.py`'s viewport currently shows an empty point cloud placeholder. The
