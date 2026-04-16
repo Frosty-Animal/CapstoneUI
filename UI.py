@@ -15,6 +15,7 @@ import os
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 import pyvista as pv
 from pyvistaqt import QtInteractor
+from scanner.capture import RealSenseCapture
 
 try:
     from pymodbus.client import ModbusTcpClient
@@ -44,6 +45,13 @@ except ModuleNotFoundError:
     from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
     from PyQt5.QtGui import QFont, QColor, QPalette, QTextCursor
 
+try:
+    import pyrealsense2 as rs
+    _PYREALSENSE_AVAILABLE = True
+except ModuleNotFoundError:
+    rs = None
+    _PYREALSENSE_AVAILABLE = False
+    
 # ── Stylesheet ────────────────────────────────────────────────────────────────
 STYLE = """
 QMainWindow, QWidget {
@@ -321,6 +329,14 @@ STATUS_ESTOP    = 1 << 4
 STATUS_SCANNING = 1 << 5
 STATUS_HLFB     = 1 << 6
 
+# ── Camera defaults ──────────────────────────────────────────────────────────
+CAM_DEFAULT_WIDTH      = 640
+CAM_DEFAULT_HEIGHT     = 480
+CAM_DEFAULT_FPS        = 30
+CAM_DEFAULT_EMIT_EVERY = 3      # emit every Nth frame to the viewport
+CAM_CLIP_MIN_M         = 0.04   # D405 min range
+CAM_CLIP_MAX_M         = 0.50   # D405 accurate range
+CAM_DECIMATION_MAG     = 2
 
 # ── 32-bit pack/unpack helpers ────────────────────────────────────────────────
 # ClearCore stores 32-bit fields natively (little-endian), so when the
@@ -614,6 +630,14 @@ class ScanToMillUI(QMainWindow):
                 # Was scanning, now stopped — scan done
                 self._on_scan_done_real()
 
+    def _init_camera(self):
+        self._camera = CameraWorker()
+        self._camera.connected.connect(self._on_camera_connected)
+        self._camera.frame_ready.connect(self._update_pointcloud_live)
+        self._camera.log_message.connect(self._log)
+        self._camera.error.connect(self._log)
+        self._camera.start()   # starts the QThread; stream stays idle until start_stream()
+
     def _on_scan_done_real(self):
         self._reset_scan_ui()
         self.progress_bar.setFormat("COMPLETE")
@@ -867,43 +891,77 @@ class ScanToMillUI(QMainWindow):
 
     # ── Viewport ──────────────────────────────────────────────────────────────
     def _init_viewport(self):
-
         vtk_lay = QVBoxLayout(self.vtk_frame)
         vtk_lay.setContentsMargins(0, 0, 0, 0)
-
+        
         self.plotter = QtInteractor(self.vtk_frame)
         self.plotter.set_background("#050709")
         vtk_lay.addWidget(self.plotter.interactor)
 
-        # Empty point cloud placeholder — real data will come from the camera
+        # Seed the viewport with an empty cloud AND register the actor once.
+        # From now on, per-frame updates just mutate self._cloud in place.
         self._cloud = make_empty_pointcloud()
+        self._cloud_actor = self.plotter.add_mesh(
+            self._cloud,
+            scalars="depth",
+            cmap="cool",
+            clim=[CAM_CLIP_MIN_M, CAM_CLIP_MAX_M],   # <- pin the color range
+            point_size=3,
+            render_points_as_spheres=True,
+            name="pointcloud",
+            show_scalar_bar=False,
+        )
+        self._mesh_actor = None
+
         self.plotter.add_axes(color="#4a6a7a")
         self.plotter.camera_position = "iso"
         self._view_mode = "cloud"
         self._log("[VIZ] Viewport ready — awaiting camera stream")
 
+
+    def _update_pointcloud_live(self, cloud: pv.PolyData):
+        """Push a new point cloud frame into the viewport.
+
+        Called from CameraWorker.frame_ready (Qt marshals it onto the GUI
+        thread for us, so VTK calls here are safe).
+        """
+        if cloud is None or cloud.n_points == 0:
+            return
+
+        # Skip viewport updates while in mesh mode — they'd be invisible anyway
+        # and the surface reconstruction would fight the live stream.
+        if self._view_mode != "cloud":
+            # Still cache the latest cloud so "switch back to point cloud"
+            # doesn't show a stale frame.
+            self._cloud.copy_from(cloud)
+            return
+
+        # In-place swap: VTK sees a Modified() polydata and re-uploads only
+        # the vertex buffer. No actor churn, no flicker, no shader rebuild.
+        self._cloud.copy_from(cloud)
+
+        # Keep the point-count readout honest
+        self._point_count = self._cloud.n_points
+        self.lbl_pts_stat.setText(str(self._point_count))
+
+        self.plotter.render()
+
     def _set_view_mode(self, mode):
-        if not hasattr(self, "plotter"):
-            return  # Viewport not initialized yet
         self._view_mode = mode
         if mode == "cloud":
             self.lbl_render_mode.setText("MODE: POINT CLOUD")
-            self.plotter.remove_actor("mesh_actor")
-            self.plotter.add_mesh(
-                self._cloud, scalars="depth", cmap="cool",
-                point_size=3, render_points_as_spheres=True,
-                name="pointcloud", show_scalar_bar=False
-            )    
+            if self._mesh_actor is not None:
+                self.plotter.remove_actor(self._mesh_actor)
+                self._mesh_actor = None
+            # Point cloud actor is already live — just make sure it's visible
+            self._cloud_actor.SetVisibility(True)
         else:
             self.lbl_render_mode.setText("MODE: MESH")
-            self.plotter.remove_actor("pointcloud")
-            if self._cloud is None or self._cloud.n_points < 4:
-                # Need at least a few points for surface reconstruction.
-                self._log("[VIZ] Mesh view: not enough points yet.")
-                self.plotter.render()
-                return
+            # Hide the live cloud rather than removing it, so the stream
+            # can keep updating self._cloud in the background.
+            self._cloud_actor.SetVisibility(False)
             surf = self._cloud.reconstruct_surface(nbr_sz=10)
-            self.plotter.add_mesh(
+            self._mesh_actor = self.plotter.add_mesh(
                 surf, color="#2a5a7a", show_edges=False,
                 opacity=1.0, name="mesh_actor",
                 pbr=False, interpolate_before_map=False,
@@ -1104,6 +1162,213 @@ class ScanToMillUI(QMainWindow):
         remaining_sec = max(0, int(self.SCAN_DURATION_SEC *
                                     (100 - self._scan_progress_pct) / 100.0))
         self.lbl_remaining.setText(f"{remaining_sec}s")
+
+class CameraWorker(QThread):
+    """Background worker that owns the RealSense D405 pipeline.
+
+    The main thread should only interact via start_stream()/stop_stream()
+    and the emitted signals — never touch self._pipeline directly, the
+    RealSense SDK isn't thread-safe across a pipeline object.
+
+    Emits pv.PolyData frames on frame_ready; the UI slot is responsible
+    for pushing them into the viewport (see _update_pointcloud_live).
+    """
+
+    connected   = pyqtSignal(bool)         # True on pipeline start, False on stop/error
+    frame_ready = pyqtSignal(object)       # pv.PolyData with 'depth' scalar
+    log_message = pyqtSignal(str)
+    error       = pyqtSignal(str)
+
+    def __init__(self,
+                 width: int = CAM_DEFAULT_WIDTH,
+                 height: int = CAM_DEFAULT_HEIGHT,
+                 fps: int = CAM_DEFAULT_FPS,
+                 emit_every: int = CAM_DEFAULT_EMIT_EVERY,
+                 parent=None):
+        super().__init__(parent)
+        self._width = width
+        self._height = height
+        self._fps = fps
+        self._emit_every = max(1, emit_every)
+
+        self._pipeline = None
+        self._pc = None               # rs.pointcloud helper
+        self._decimation = None
+        self._spatial = None
+        self._hole_fill = None
+
+        self._streaming = False
+        self._stop_flag = False
+        self._frame_idx = 0
+
+    # ── Public API (call from main thread) ────────────────────────────────────
+    def start_stream(self):
+        """Ask the worker to bring the pipeline up. Non-blocking."""
+        self._streaming = True
+
+    def stop_stream(self):
+        """Ask the worker to tear the pipeline down but keep the thread alive."""
+        self._streaming = False
+
+    def stop(self):
+        """Shut the worker thread down entirely."""
+        self._stop_flag = True
+        self._streaming = False
+
+    def set_emit_every(self, n: int):
+        self._emit_every = max(1, int(n))
+
+    def capture(self):
+        """Expose the underlying RealSenseCapture for scan-path averaged
+        captures. Returns None if the pipeline isn't up.
+
+        IMPORTANT: the caller must not invoke get_live_polydata() on this
+        object — that would race the worker's own frame loop. Only use
+        capture_averaged_frames() / capture() from the scan orchestrator,
+        and only while the worker is paused (stop_stream()).
+        """
+        return self._cap if (self._cap and self._cap.is_running()) else None
+    # ── Worker loop ───────────────────────────────────────────────────────────
+    def run(self):
+        if not _PYREALSENSE_AVAILABLE:
+            self.error.emit("[CAM] pyrealsense2 not installed")
+            return
+
+        self._cap = RealSenseCapture(
+            width=self._width, height=self._height, fps=self._fps,
+        )
+
+        while not self._stop_flag:
+            if not self._streaming:
+                if self._cap.is_running():
+                    self._cap.stop()
+                    self.connected.emit(False)
+                self.msleep(50)
+                continue
+
+            if not self._cap.is_running():
+                try:
+                    self._cap.start()
+                    self.connected.emit(True)
+                    self.log_message.emit("[CAM] D405 stream up")
+                except Exception as e:
+                    self.error.emit(f"[CAM] Open error: {e}")
+                    self._streaming = False
+                    self.msleep(500)
+                    continue
+
+            try:
+                cloud = self._cap.get_live_polydata(timeout_ms=1000)
+            except Exception as e:
+                self.error.emit(f"[CAM] Frame error: {e}")
+                self._cap.stop()
+                self.connected.emit(False)
+                continue
+
+            self._frame_idx += 1
+            if cloud is not None and self._frame_idx % self._emit_every == 0:
+                self.frame_ready.emit(cloud)
+
+        if self._cap.is_running():
+            self._cap.stop()
+            self.connected.emit(False)
+        self.log_message.emit("[CAM] Worker stopped.")
+
+    # ── Internal: pipeline lifecycle ─────────────────────────────────────────
+    def _open_pipeline(self) -> bool:
+        try:
+            self._pipeline = rs.pipeline()
+            cfg = rs.config()
+            cfg.enable_stream(rs.stream.depth, self._width, self._height,
+                              rs.format.z16, self._fps)
+            cfg.enable_stream(rs.stream.color, self._width, self._height,
+                              rs.format.bgr8, self._fps)
+            self._pipeline.start(cfg)
+
+            # Light filter chain — no temporal, we want fresh frames for live preview
+            self._decimation = rs.decimation_filter()
+            self._decimation.set_option(rs.option.filter_magnitude,
+                                        CAM_DECIMATION_MAG)
+            self._spatial = rs.spatial_filter()
+            self._spatial.set_option(rs.option.filter_magnitude, 2)
+            self._spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
+            self._spatial.set_option(rs.option.filter_smooth_delta, 20)
+            self._hole_fill = rs.hole_filling_filter()
+
+            self._pc = rs.pointcloud()
+            self._frame_idx = 0
+
+            self.connected.emit(True)
+            self.log_message.emit(
+                f"[CAM] D405 stream up @ {self._width}x{self._height}/{self._fps}fps"
+            )
+            return True
+        except Exception as e:
+            self.error.emit(f"[CAM] Open error: {e}")
+            self.connected.emit(False)
+            self._pipeline = None
+            return False
+
+    def _close_pipeline(self):
+        try:
+            if self._pipeline is not None:
+                self._pipeline.stop()
+        except Exception:
+            pass
+        self._pipeline = None
+        self._pc = None
+        self.connected.emit(False)
+
+    # ── Internal: per-frame work ─────────────────────────────────────────────
+    def _frame_loop(self):
+        """Pull frames until asked to stop or the pipeline fails."""
+        while self._streaming and not self._stop_flag:
+            try:
+                frames = self._pipeline.wait_for_frames(timeout_ms=1000)
+            except Exception as e:
+                self.error.emit(f"[CAM] Frame timeout / pipeline error: {e}")
+                return
+
+            depth = frames.get_depth_frame()
+            if not depth:
+                continue
+
+            self._frame_idx += 1
+            # Throttle: only build + emit every Nth frame
+            if self._frame_idx % self._emit_every != 0:
+                continue
+
+            try:
+                cloud = self._build_polydata(depth)
+            except Exception as e:
+                self.error.emit(f"[CAM] Cloud build error: {e}")
+                continue
+
+            if cloud is not None:
+                self.frame_ready.emit(cloud)
+
+    def _build_polydata(self, depth_frame):
+        """Depth frame -> filtered -> pv.PolyData with 'depth' scalar."""
+        f = self._decimation.process(depth_frame)
+        f = self._spatial.process(f)
+        f = self._hole_fill.process(f)
+
+        points = self._pc.calculate(f)
+        verts = (np.asanyarray(points.get_vertices())
+                   .view(np.float32)
+                   .reshape(-1, 3))
+
+        # Drop invalid + out-of-range points (D405 noise explodes past ~0.5 m)
+        z = verts[:, 2]
+        mask = (z > CAM_CLIP_MIN_M) & (z < CAM_CLIP_MAX_M)
+        verts = verts[mask]
+        if verts.shape[0] == 0:
+            return None
+
+        cloud = pv.PolyData(verts)
+        cloud["depth"] = verts[:, 2].copy()
+        return cloud
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
