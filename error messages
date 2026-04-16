@@ -79,3 +79,27 @@ Change: 2026-04-10 04:29:19.811501444 -0500
 [17:15:50]  [SYS] Post-processing options unlocked.
 
 [17:10:41]  [MODBUS] Write exception: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+
+from /home/cnc-machine-2/Open3D-0.18.0/assimp/src/ext_assimp/code/AssetLib/MDL/MDLLoader.cpp:51:
+In static member function ‘static _Up* std::__copy_move<_IsMove, true, std::random_access_iterator_tag>::__copy_m(_Tp*, _Tp*, _Up*) [with _Tp = long unsigned int; _Up = long unsigned int; bool _IsMove = false]’,
+    inlined from ‘_OI std::__copy_move_a2(_II, _II, _OI) [with bool _IsMove = false; _II = long unsigned int*; _OI = long unsigned int*]’ at /usr/include/c++/14/bits/stl_algobase.h:521:30,
+    inlined from ‘_OI std::__copy_move_a1(_II, _II, _OI) [with bool _IsMove = false; _II = long unsigned int*; _OI = long unsigned int*]’ at /usr/include/c++/14/bits/stl_algobase.h:548:42,
+    inlined from ‘_OI std::__copy_move_a(_II, _II, _OI) [with bool _IsMove = false; _II = long unsigned int*; _OI = long unsigned int*]’ at /usr/include/c++/14/bits/stl_algobase.h:555:31,
+    inlined from ‘_OI std::copy(_II, _II, _OI) [with _II = long unsigned int*; _OI = long unsigned int*]’ at /usr/include/c++/14/bits/stl_algobase.h:651:7,
+    inlined from ‘std::vector<bool, _Alloc>::iterator std::vector<bool, _Alloc>::_M_copy_aligned(const_iterator, const_iterator, iterator) [with _Alloc = std::allocator<bool>]’ at /usr/include/c++/14/bits/stl_bvector.h:1342:28,
+    inlined from ‘void std::vector<bool, _Alloc>::_M_reallocate(size_type) [with _Alloc = std::allocator<bool>]’ at /usr/include/c++/14/bits/vector.tcc:1059:40,
+    inlined from ‘void std::vector<bool, _Alloc>::reserve(size_type) [with _Alloc = std::allocator<bool>]’ at /usr/include/c++/14/bits/stl_bvector.h:1130:17,
+    inlined from ‘Assimp::MDL::IntSharedData_MDL7::IntSharedData_MDL7()’ at /home/cnc-machine-2/Open3D-0.18.0/assimp/src/ext_assimp/code/AssetLib/MDL/MDLFileData.h:879:32,
+    inlined from ‘void Assimp::MDLImporter::InternReadFile_3DGS_MDL7()’ at /home/cnc-machine-2/Open3D-0.18.0/assimp/src/ext_assimp/code/AssetLib/MDL/MDLLoader.cpp:1351:29:
+/usr/include/c++/14/bits/stl_algobase.h:452:30: error: ‘void* __builtin_memmove(void*, const void*, long unsigned int)’ forming offset 8 is out of the bounds [0, 8] [-Werror=array-bounds=]
+  452 |             __builtin_memmove(__result, __first, sizeof(_Tp) * _Num);
+      |             ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cc1plus: all warnings being treated as errors
+make[6]: *** [code/CMakeFiles/assimp.dir/build.make:1507: code/CMakeFiles/assimp.dir/AssetLib/MDL/MDLLoader.cpp.o] Error 1
+make[5]: *** [CMakeFiles/Makefile2:194: code/CMakeFiles/assimp.dir/all] Error 2
+make[4]: *** [Makefile:136: all] Error 2
+make[3]: *** [CMakeFiles/ext_assimp.dir/build.make:86: assimp/src/ext_assimp-stamp/ext_assimp-build] Error 2
+make[2]: *** [CMakeFiles/Makefile2:1137: CMakeFiles/ext_assimp.dir/all] Error 2
+make[1]: *** [CMakeFiles/Makefile2:3896: cpp/pybind/CMakeFiles/install-pip-package.dir/rule] Error 2
+make: *** [Makefile:1034: install-pip-package] Error 2
+(venv) cnc-machine-2@CNC-1:~/Open3D-0.18.0 $ 
