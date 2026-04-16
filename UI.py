@@ -5,6 +5,9 @@ Requires: PyQt6, pyvistaqt, pyvista, numpy
 """
 
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / "scan_to_cnc"))
+
 import queue
 import numpy as np
 import os
