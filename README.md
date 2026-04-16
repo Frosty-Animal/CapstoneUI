@@ -958,6 +958,7 @@ struct, and command dispatch. Uses the ClearCore Arduino wrapper API.
 These are the things this comms test does NOT do, in rough priority order
 of "what to tackle next."
 
+
 ### No real point cloud capture yet
 
 `UI.py`'s viewport currently shows an empty point cloud placeholder. The
@@ -1022,7 +1023,8 @@ ClearCore — but it would need to be reworked to use the Arduino
 `server.accept()` API and a client array if you ever want multiple
 masters. See the Arduino `EthernetServerAccept` reference for how.
 
----
+### Adding SD Card Slot
+An Adafruit SD Card holder/reader will be added so that the SD can be taken to the Genmitsu 3020-pro max v2 CNC in Endeavor 110 for operation and testing
 
 ## Credits and Contact
 

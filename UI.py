@@ -1372,7 +1372,7 @@ class CameraWorker(QThread):
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     pv.set_plot_theme("dark")
-    pv.global_theme.multi_samples = 1        # <-- add this
+    pv.global_theme.multi_samples = 1      
     pv.global_theme.smooth_shading = False
     pv.global_theme.allow_empty_mesh = True   # placeholder cloud has 0 points
     app = QApplication(sys.argv)
